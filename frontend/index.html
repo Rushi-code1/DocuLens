@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/><polyline points='14 2 14 8 20 8'/><line x1='16' y1='13' x2='8' y2='13'/><line x1='16' y1='17' x2='8' y2='17'/><polyline points='10 9 9 9 8 9'/></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DocuLens - AI Document Reader & Assistant</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class'
+      };
+    </script>
+    <!-- Immediate theme check to prevent flash -->
+    <script>
+      if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    </script>
+    <!-- Mozilla PDF.js Stylesheet -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+      
+      body {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      .doc-content {
+        font-family: 'Lora', Georgia, serif;
+      }
+
+      /* PDF.js Page & TextLayer Styling */
+      .pdf-page-wrapper {
+        position: relative;
+        margin: 1rem auto;
+        box-shadow: 0 4px 18px -2px rgba(0, 0, 0, 0.15), 0 2px 6px -1px rgba(0, 0, 0, 0.08);
+        border-radius: 6px;
+        overflow: hidden;
+        background: #ffffff;
+      }
+      .pdf-page-wrapper canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      .pdf-page-wrapper .textLayer {
+        position: absolute;
+        left: 0;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        overflow: hidden;
+        opacity: 1 !important;
+        line-height: 1.0;
+        z-index: 5;
+      }
+      .pdf-page-wrapper .textLayer span {
+        color: transparent !important;
+        position: absolute;
+        white-space: pre;
+        cursor: text;
+        transform-origin: 0% 0%;
+      }
+      .pdf-page-wrapper .textLayer ::selection {
+        background: rgba(245, 158, 11, 0.5) !important;
+        color: transparent !important;
+      }
+      .dark .pdf-page-wrapper .textLayer ::selection {
+        background: rgba(59, 130, 246, 0.5) !important;
+        color: transparent !important;
+      }
+
+      /* Markdown Chat Typography */
+      .chat-markdown p { margin-bottom: 0.5rem; }
+      .chat-markdown p:last-child { margin-bottom: 0; }
+      .chat-markdown ul { list-style-type: disc; margin-left: 1.25rem; margin-top: 0.25rem; margin-bottom: 0.5rem; }
+      .chat-markdown ol { list-style-type: decimal; margin-left: 1.25rem; margin-top: 0.25rem; margin-bottom: 0.5rem; }
+      .chat-markdown li { margin-bottom: 0.2rem; }
+      .chat-markdown code { background: rgba(0,0,0,0.06); padding: 0.15rem 0.35rem; border-radius: 0.25rem; font-family: monospace; font-size: 0.85em; }
+      .dark .chat-markdown code { background: rgba(255,255,255,0.1); }
+      .chat-markdown pre { background: #1e293b; color: #f8fafc; padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; font-size: 0.8em; margin: 0.5rem 0; }
+      .chat-markdown h1, .chat-markdown h2, .chat-markdown h3 { font-weight: 600; margin-top: 0.5rem; margin-bottom: 0.25rem; }
+      .chat-markdown blockquote { border-left: 3px solid #3b82f6; padding-left: 0.5rem; font-style: italic; opacity: 0.85; margin: 0.4rem 0; }
+      .chat-markdown table { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.85em; }
+      .chat-markdown th, .chat-markdown td { border: 1px solid #e2e8f0; padding: 0.3rem 0.5rem; }
+      .dark .chat-markdown th, .dark .chat-markdown td { border-color: #334155; }
+      
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: #d6d3d1; border-radius: 9999px; }
+      .dark ::-webkit-scrollbar-thumb { background: #334155; }
+    </style>
+  </head>
+  <body class="h-full bg-[#FAF9F5] dark:bg-slate-950 text-stone-800 dark:text-slate-100 antialiased selection:bg-blue-100 dark:selection:bg-blue-900">
+    <div id="root" class="h-full flex flex-col"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
