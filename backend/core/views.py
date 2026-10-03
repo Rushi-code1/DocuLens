@@ -1,3 +1,4 @@
+from django.http import FileResponse
 from rest_framework import generics, status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -143,3 +144,16 @@ class DocumentAskView(APIView):
             "user_message": ChatMessageSerializer(user_msg).data,
             "assistant_message": ChatMessageSerializer(bot_msg).data
         })
+
+
+class DocumentDownloadView(APIView):
+    """High-speed binary stream endpoint with JWT authentication."""
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, doc_id):
+        doc = get_object_or_404(Document, id=doc_id, user=request.user)
+        if not doc.file:
+            return Response({"detail": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        response = FileResponse(doc.file.open('rb'), content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="{doc.filename}"'
+        return response

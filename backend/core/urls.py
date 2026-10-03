@@ -11,6 +11,7 @@ from .views import (
     DocumentDetailView,
     DocumentMessagesView,
     DocumentAskView,
+    DocumentDownloadView,
 )
 
 urlpatterns = [
@@ -24,6 +25,7 @@ urlpatterns = [
     path('documents/', DocumentListView.as_view(), name='document_list'),
     path('documents/upload/', DocumentUploadView.as_view(), name='document_upload'),
     path('documents/<int:pk>/', DocumentDetailView.as_view(), name='document_detail'),
+    path('documents/<int:doc_id>/download/', DocumentDownloadView.as_view(), name='document_download'),
     path('documents/<int:doc_id>/messages/', DocumentMessagesView.as_view(), name='document_messages'),
     path('documents/<int:doc_id>/ask/', DocumentAskView.as_view(), name='document_ask'),
 ]

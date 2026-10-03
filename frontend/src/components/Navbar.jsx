@@ -1,6 +1,7 @@
 import React from 'react';
-import { Sparkles, Sun, Moon, LogOut, User, FileText, ChevronRight } from 'lucide-react';
+import { Sun, Moon, LogOut, User } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import docsleansIcon from '../assets/docsleans-icon.png';
 
 export default function Navbar({
   activeDoc,
@@ -15,13 +16,15 @@ export default function Navbar({
     <header className="h-14 border-b border-[#E7E5E0] dark:border-slate-800 bg-[#FAF9F5] dark:bg-slate-900 px-5 flex items-center justify-between flex-shrink-0 z-20 transition-colors">
       {/* Brand / Logo */}
       <div className="flex items-center space-x-3">
-        <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
-          <Sparkles className="w-4 h-4" />
-        </div>
+        <img
+          src={docsleansIcon}
+          alt="docsLeans"
+          className="w-8 h-8 rounded-xl object-contain shadow-xs"
+        />
         <div>
           <div className="flex items-center space-x-2">
             <span className="font-bold text-sm tracking-tight text-stone-900 dark:text-white">
-              DocuLens
+              docsLeans
             </span>
             <span className="text-[10px] bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-400 font-semibold px-2 py-0.5 rounded-full border border-blue-200/60 dark:border-blue-900">
               AI Reader

@@ -85,6 +85,17 @@ export async function fetchDocument(docId) {
   return apiRequest(`/documents/${docId}/`);
 }
 
+export async function fetchDocumentBinary(docId) {
+  const url = `${API_BASE}/documents/${docId}/download/`;
+  const res = await fetch(url, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to download document: HTTP ${res.status}`);
+  }
+  return res.arrayBuffer();
+}
+
 export async function deleteDocument(docId) {
   return apiRequest(`/documents/${docId}/`, {
     method: 'DELETE'

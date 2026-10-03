@@ -2,6 +2,7 @@ import os
 import io
 import time
 import logging
+from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel, Field
 
@@ -11,7 +12,6 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGener
 from langchain_chroma import Chroma
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,11 @@ class DocumentSummary(BaseModel):
 summary_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
-        "You are an expert document analyst. Analyze the provided document text and generate an objective, concise, and high-value structured summary. Be specific and grounded strictly in the document content."
+        "You are an expert document analyst. "
+        "CURRENT DATE: {current_date} (Year: {current_year}). "
+        "The current real-world year is {current_year}. All temporal reasoning, timeline analysis, and date validations must be evaluated relative to this current date (dates up to and including {current_year} are valid past/present dates). "
+        "Analyze the provided document text and generate an objective, concise, and high-value structured summary. "
+        "Be specific and grounded strictly in the document content."
     ),
     (
         "human",
@@ -154,9 +158,12 @@ def process_document(document_instance, content_bytes: bytes):
     # Day 3: Generate Structured Summary via LCEL
     summary_data = None
     try:
+        now = datetime.now()
         summary_result: DocumentSummary = structured_summary_chain.invoke({
             "filename": document_instance.filename,
-            "text": text[:6000]
+            "text": text[:6000],
+            "current_date": now.strftime("%B %d, %Y"),
+            "current_year": str(now.year)
         })
         summary_data = summary_result.model_dump()
     except Exception as exc:
@@ -172,82 +179,21 @@ def process_document(document_instance, content_bytes: bytes):
 
 
 def query_document(user, document_instance, question: str, selected_context: str = None):
-    """Queries vectorstore with strict metadata isolation and generates response using gemini-3.1-flash-lite."""
-    vectorstore = get_vectorstore()
-    focus_text = selected_context.strip() if selected_context else None
+    from .graph_rag import rag_graph
 
-    search_query = f"{question} {focus_text[:150]}" if focus_text else question
-
-    # Scoped retriever filtering strictly to this document and user
-    scored_docs = vectorstore.similarity_search_with_relevance_scores(
-        search_query,
-        k=4,
-        filter={
-            "$and": [
-                {"user_id": user.id},
-                {"document_id": document_instance.id}
-            ]
-        }
-    )
-
-    top_score = scored_docs[0][1] if scored_docs else 0.0
-
-    if not focus_text and top_score < 0.35:
-        return {
-            "answer": "I couldn't find any relevant information about that in this document. Please ask a question related to its content.",
-            "sources": []
-        }
-
-    context_sections = []
-    sources = []
-
-    if focus_text:
-        context_sections.append(f"--- SPECIFIC SECTION HIGHLIGHTED BY USER ---\n{focus_text}")
-        sources.append({
-            "id": "Selected Text",
-            "content": focus_text,
-            "source": "User Highlighted Selection",
-            "match": "Focus"
-        })
-
-    if scored_docs:
-        match_texts = [doc.page_content for doc, _ in scored_docs]
-        context_sections.append("--- RELEVANT CONTEXT FROM FULL DOCUMENT ---\n" + "\n\n".join(match_texts))
-        for i, (d, score) in enumerate(scored_docs):
-            if focus_text and (focus_text in d.page_content or d.page_content in focus_text):
-                continue
-            sources.append({
-                "id": i + 1,
-                "content": d.page_content,
-                "source": d.metadata.get("source", document_instance.filename),
-                "match": f"{max(10, min(99, int(score * 100)))}%"
-            })
-
-    context = "\n\n".join(context_sections)
-
-    template = """You are a helpful and accurate document assistant.
-Use the following context from the document to answer the question thoroughly and completely.
-If the user specifically highlighted a section, pay special attention to it, but also draw from the broader document context to provide a complete answer.
-If the context does not contain enough information to answer, state that clearly.
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:"""
-
-    prompt = ChatPromptTemplate.from_template(template)
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite",
-        temperature=0.2,
-        max_output_tokens=2048
-    )
-    chain = prompt | llm | StrOutputParser()
-    answer = chain.invoke({"context": context, "question": question})
-
+    initial_state = {
+        "user_id": user.id,
+        "document_id": document_instance.id,
+        "filename": document_instance.filename,
+        "question": question,
+        "selected_context": selected_context,
+        "documents": [],
+        "sources": [],
+        "answer": ""
+    }
+    # Execute graph
+    final_state = rag_graph.invoke(initial_state)
     return {
-        "answer": answer,
-        "sources": sources
+        "answer": final_state["answer"],
+        "sources": final_state["sources"]
     }

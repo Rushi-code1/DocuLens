@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Sparkles, Lock, User, Mail, AlertCircle, ArrowRight } from 'lucide-react';
+import { Lock, User, Mail, AlertCircle, ArrowRight } from 'lucide-react';
+import docsleansIcon from '../assets/docsleans-icon.png';
 
 export default function AuthModal({ isOpen, onClose }) {
   const { login, register } = useAuth();
@@ -37,12 +38,14 @@ export default function AuthModal({ isOpen, onClose }) {
       <div className="bg-[#FAF9F5] dark:bg-slate-900 border border-[#E7E5E0] dark:border-slate-800 rounded-3xl p-7 max-w-sm w-full shadow-2xl relative transition-all">
         {/* Header */}
         <div className="flex items-center space-x-2.5 mb-2">
-          <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
-            <Sparkles className="w-4 h-4" />
-          </div>
+          <img
+            src={docsleansIcon}
+            alt="docsLeans"
+            className="w-8 h-8 rounded-xl object-contain shadow-xs"
+          />
           <div>
             <h3 className="text-base font-semibold text-stone-900 dark:text-white">
-              {isRegister ? 'Create an Account' : 'Welcome to DocuLens'}
+              {isRegister ? 'Create an Account' : 'Welcome to docsLeans'}
             </h3>
             <p className="text-[11px] text-stone-500 dark:text-slate-400">
               {isRegister ? 'Sign up to save your documents & chat history' : 'Sign in to access your saved documents'}

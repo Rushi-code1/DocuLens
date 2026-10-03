@@ -95,7 +95,7 @@ export default function ChatWorkspace({
               </div>
             ) : (
               <div>
-                <p className="font-medium text-stone-900 dark:text-white mb-1">Welcome to DocuLens!</p>
+                <p className="font-medium text-stone-900 dark:text-white mb-1">Welcome to docsLeans!</p>
                 <p>
                   I've read <strong className="text-stone-900 dark:text-white">{document?.filename}</strong>. You can ask
                   questions, or highlight any text on the left to focus the answer!

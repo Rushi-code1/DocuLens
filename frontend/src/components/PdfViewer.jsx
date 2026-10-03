@@ -1,8 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Eye, BookOpen, Search, Sparkles, Pin } from 'lucide-react';
+import { fetchDocumentBinary } from '../api';
+
+// Configure Web Worker location at module evaluation time
+if (typeof window !== 'undefined' && window.pdfjsLib) {
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+// In-memory session cache for parsed PDF document proxies
+const docPdfCache = new Map();
 
 export default function PdfViewer({
-  document,
+  document: docItem,
   onPinContext,
   onAskSection
 }) {
@@ -16,15 +26,20 @@ export default function PdfViewer({
   const pagesContainerRef = useRef(null);
   const popoverRef = useRef(null);
 
-  const isPdf = document?.filename?.toLowerCase().endsWith('.pdf') || document?.file?.toLowerCase().endsWith('.pdf');
+  const isPdf =
+    docItem?.filename?.toLowerCase().endsWith('.pdf') ||
+    docItem?.file?.toLowerCase().endsWith('.pdf');
 
   useEffect(() => {
-    if (!isPdf || !document?.file_url) {
+    if (!isPdf || !docItem?.file_url) {
       setViewMode('text');
       return;
     }
 
     let isMounted = true;
+    let observer = null;
+    const activeRenderTasks = new Map();
+
     setViewMode('pdf');
     renderPdf();
 
@@ -34,70 +49,217 @@ export default function PdfViewer({
       pagesContainerRef.current.innerHTML = '';
 
       try {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
 
-        const loadingTask = window.pdfjsLib.getDocument({ url: document.file_url });
-        const pdf = await loadingTask.promise;
+        const PDF_BASE_CONFIG = {
+          cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+          cMapPacked: true,
+          standardFontDataUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/',
+          enableXfa: false,
+          disableFontFace: false // Enables browser @font-face engine for native font hinting and razor-sharp text
+        };
+
+        let pdf;
+        if (docItem.id && docPdfCache.has(docItem.id)) {
+          pdf = docPdfCache.get(docItem.id);
+        } else {
+          let pdfSource;
+          if (docItem._localFile) {
+            const arrayBuffer = await docItem._localFile.arrayBuffer();
+            pdfSource = {
+              data: arrayBuffer,
+              ...PDF_BASE_CONFIG
+            };
+          } else {
+            // Enable HTTP range streaming for instant first-page delivery
+            pdfSource = {
+              url: docItem.file_url,
+              rangeChunkSize: 65536,
+              disableRange: false,
+              disableStream: false,
+              ...PDF_BASE_CONFIG
+            };
+          }
+
+          try {
+            const loadingTask = window.pdfjsLib.getDocument(pdfSource);
+            pdf = await loadingTask.promise;
+          } catch (streamErr) {
+            // Fallback to direct array buffer retrieval if range streaming fails
+            console.warn('Direct stream error, attempting binary fallback:', streamErr);
+            const arrayBuffer = await fetchDocumentBinary(docItem.id);
+            const fallbackTask = window.pdfjsLib.getDocument({
+              data: arrayBuffer,
+              ...PDF_BASE_CONFIG
+            });
+            pdf = await fallbackTask.promise;
+          }
+
+          if (docItem.id) {
+            docPdfCache.set(docItem.id, pdf);
+          }
+        }
 
         if (!isMounted) return;
+        setLoadingPdf(false);
 
         const containerWidth = containerRef.current?.clientWidth || 800;
+        const dpr = window.devicePixelRatio || 1;
+        // Supersample canvas resolution to at least 2.0x (up to 2.5x on high-DPI screens) for crystal-clear, Retina-quality text
+        const outputScale = Math.min(Math.max(dpr, 2.0), 2.5);
 
-        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-          if (!isMounted) break;
-          const page = await pdf.getPage(pageNum);
+        // Calculate layout geometry from page 1 immediately
+        const page1 = await pdf.getPage(1);
+        const unscaled1 = page1.getViewport({ scale: 1.0 });
+        const targetWidth = Math.min(containerWidth - 64, 820);
+        const scale = Math.max(1.0, targetWidth / unscaled1.width);
+        const defaultViewport = page1.getViewport({ scale });
+        const estimatedWidth = Math.floor(defaultViewport.width);
+        const estimatedHeight = Math.floor(defaultViewport.height);
 
-          const unscaledViewport = page.getViewport({ scale: 1.0 });
-          const targetWidth = Math.min(containerWidth - 64, 820);
-          const scale = Math.max(1.0, targetWidth / unscaledViewport.width);
-          const viewport = page.getViewport({ scale });
+        // Mount Page 1 wrapper immediately
+        const page1Wrapper = document.createElement('div');
+        page1Wrapper.className = 'pdf-page-wrapper';
+        page1Wrapper.style.position = 'relative';
+        page1Wrapper.style.overflow = 'hidden';
+        page1Wrapper.style.width = `${estimatedWidth}px`;
+        page1Wrapper.style.minHeight = `${estimatedHeight}px`;
+        page1Wrapper.setAttribute('data-page-number', '1');
+        pagesContainerRef.current.appendChild(page1Wrapper);
 
-          const pageWrapper = document.createElement('div');
-          pageWrapper.className = 'pdf-page-wrapper';
-          pageWrapper.style.width = `${Math.floor(viewport.width)}px`;
-          pageWrapper.style.height = `${Math.floor(viewport.height)}px`;
-          pageWrapper.setAttribute('data-page-number', pageNum);
+        const renderedPages = new Set([1]);
+        const pageWrappers = [page1Wrapper];
 
+        async function renderSinglePage(page, pageNum, wrapper) {
+          if (!isMounted || wrapper.hasAttribute('data-rendered')) return;
+          wrapper.setAttribute('data-rendered', 'true');
+
+          const vp = page.getViewport({ scale });
+          wrapper.style.width = `${Math.floor(vp.width)}px`;
+          wrapper.style.height = `${Math.floor(vp.height)}px`;
+
+          // Hardware-accelerated canvas context
           const canvas = document.createElement('canvas');
-          const context = canvas.getContext('2d');
-          const outputScale = window.devicePixelRatio || 1;
-          canvas.width = Math.floor(viewport.width * outputScale);
-          canvas.height = Math.floor(viewport.height * outputScale);
-          canvas.style.width = `${Math.floor(viewport.width)}px`;
-          canvas.style.height = `${Math.floor(viewport.height)}px`;
+          const context = canvas.getContext('2d', { alpha: false });
+          canvas.width = Math.floor(vp.width * outputScale);
+          canvas.height = Math.floor(vp.height * outputScale);
+          canvas.style.width = `${Math.floor(vp.width)}px`;
+          canvas.style.height = `${Math.floor(vp.height)}px`;
+
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = 'high';
 
           const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
-
           const renderContext = {
             canvasContext: context,
             transform: transform,
-            viewport: viewport
+            viewport: vp,
+            intent: 'display'
           };
 
           const textLayerDiv = document.createElement('div');
           textLayerDiv.className = 'textLayer';
-          textLayerDiv.style.width = `${Math.floor(viewport.width)}px`;
-          textLayerDiv.style.height = `${Math.floor(viewport.height)}px`;
-          textLayerDiv.style.setProperty('--scale-factor', viewport.scale);
+          textLayerDiv.style.position = 'absolute';
+          textLayerDiv.style.left = '0';
+          textLayerDiv.style.top = '0';
+          textLayerDiv.style.width = `${Math.floor(vp.width)}px`;
+          textLayerDiv.style.height = `${Math.floor(vp.height)}px`;
+          textLayerDiv.style.setProperty('--scale-factor', vp.scale);
 
-          pageWrapper.appendChild(canvas);
-          pageWrapper.appendChild(textLayerDiv);
-          pagesContainerRef.current.appendChild(pageWrapper);
+          wrapper.appendChild(canvas);
+          wrapper.appendChild(textLayerDiv);
 
-          await page.render(renderContext).promise;
+          // Rasterize canvas
+          const renderTask = page.render(renderContext);
+          activeRenderTasks.set(pageNum, renderTask);
 
-          const textContent = await page.getTextContent();
-          const textTask = window.pdfjsLib.renderTextLayer({
-            textContentSource: textContent,
-            container: textLayerDiv,
-            viewport: viewport,
-            textDivs: []
+          const canvasPromise = renderTask.promise.catch((err) => {
+            if (err?.name !== 'RenderingCancelledException') throw err;
           });
-          if (textTask && textTask.promise) {
-            await textTask.promise;
+
+          // Concurrent text layer extraction
+          const textPromise = page
+            .getTextContent()
+            .then((textContent) => {
+              if (!isMounted) return null;
+              if (window.pdfjsLib.TextLayer) {
+                const textLayer = new window.pdfjsLib.TextLayer({
+                  textContentSource: textContent,
+                  container: textLayerDiv,
+                  viewport: vp
+                });
+                return textLayer.render();
+              } else if (window.pdfjsLib.renderTextLayer) {
+                return window.pdfjsLib.renderTextLayer({
+                  textContentSource: textContent,
+                  container: textLayerDiv,
+                  viewport: vp,
+                  textDivs: []
+                }).promise;
+              }
+            })
+            .catch(console.warn);
+
+          try {
+            await Promise.all([canvasPromise, textPromise]);
+          } finally {
+            activeRenderTasks.delete(pageNum);
           }
         }
+
+        // Render Page 1 first to display content instantly
+        renderSinglePage(page1, 1, page1Wrapper);
+
+        // Defer creation of remaining page skeletons to keep the main thread fluid
+        setTimeout(() => {
+          if (!isMounted || !pagesContainerRef.current) return;
+
+          for (let pageNum = 2; pageNum <= pdf.numPages; pageNum++) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'pdf-page-wrapper';
+            wrapper.style.position = 'relative';
+            wrapper.style.overflow = 'hidden';
+            wrapper.style.width = `${estimatedWidth}px`;
+            wrapper.style.minHeight = `${estimatedHeight}px`;
+            wrapper.setAttribute('data-page-number', pageNum);
+            pagesContainerRef.current.appendChild(wrapper);
+            pageWrappers.push(wrapper);
+
+            if (observer) {
+              observer.observe(wrapper);
+            }
+          }
+        }, 0);
+
+        // IntersectionObserver for remaining pages
+        observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                const wrapper = entry.target;
+                const pNum = parseInt(wrapper.getAttribute('data-page-number'), 10);
+                if (!renderedPages.has(pNum)) {
+                  renderedPages.add(pNum);
+                  pdf
+                    .getPage(pNum)
+                    .then((p) => {
+                      renderSinglePage(p, pNum, wrapper);
+                    })
+                    .catch(console.warn);
+                }
+              }
+            });
+          },
+          {
+            root: containerRef.current,
+            rootMargin: '450px 0px'
+          }
+        );
+
+        observer.observe(page1Wrapper);
       } catch (err) {
         console.error('PDF.js render error:', err);
       } finally {
@@ -105,10 +267,20 @@ export default function PdfViewer({
       }
     }
 
+    // Effect cleanup
     return () => {
       isMounted = false;
+      if (observer) {
+        observer.disconnect();
+      }
+      activeRenderTasks.forEach((task) => {
+        try {
+          task.cancel();
+        } catch (_) {}
+      });
+      activeRenderTasks.clear();
     };
-  }, [document?.id, document?.file_url]);
+  }, [docItem?.id, docItem?.file_url, isPdf]);
 
   // Handle Text Selection inside PDF and Text Reader
   useEffect(() => {
@@ -133,7 +305,10 @@ export default function PdfViewer({
         if (isInsidePdf || isInsideText) {
           const rect = range.getBoundingClientRect();
           if (rect.width > 0 && rect.height > 0) {
-            const left = Math.max(16, Math.min(window.innerWidth - 220, rect.left + rect.width / 2 - 90));
+            const left = Math.max(
+              16,
+              Math.min(window.innerWidth - 220, rect.left + rect.width / 2 - 90)
+            );
             let top = rect.top - 46;
             if (top < 10) top = rect.bottom + 8;
 
@@ -161,13 +336,16 @@ export default function PdfViewer({
   }, []);
 
   const highlightedText = () => {
-    if (!document?.full_text) return '';
-    if (!searchQuery.trim()) return document.full_text;
+    if (!docItem?.full_text) return '';
+    if (!searchQuery.trim()) return docItem.full_text;
 
     const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-    return document.full_text.split(regex).map((part, i) =>
+    return docItem.full_text.split(regex).map((part, i) =>
       part.toLowerCase() === searchQuery.toLowerCase() ? (
-        <mark key={i} className="bg-amber-200 dark:bg-amber-400 dark:text-slate-900 text-stone-900 px-0.5 rounded font-medium">
+        <mark
+          key={i}
+          className="bg-amber-200 dark:bg-amber-400 dark:text-slate-900 text-stone-900 px-0.5 rounded font-medium"
+        >
           {part}
         </mark>
       ) : (
@@ -211,7 +389,7 @@ export default function PdfViewer({
           )}
 
           <span className="text-[11px] text-stone-400 dark:text-slate-500">
-            {document?.word_count ? `${document.word_count.toLocaleString()} words` : ''}
+            {docItem?.word_count ? `${docItem.word_count.toLocaleString()} words` : ''}
           </span>
         </div>
 
@@ -234,9 +412,9 @@ export default function PdfViewer({
       {/* Viewer Main Body */}
       <div ref={containerRef} className="flex-1 overflow-y-auto relative">
         {loadingPdf && viewMode === 'pdf' && (
-          <div className="py-16 flex flex-col items-center justify-center text-stone-500 dark:text-slate-400 text-xs">
-            <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
-            <p className="font-medium">Rendering PDF pages...</p>
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#FAF9F5]/90 dark:bg-slate-900/90 backdrop-blur-xs text-stone-500 dark:text-slate-400 text-xs">
+            <div className="w-7 h-7 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
+            <p className="font-medium text-stone-700 dark:text-slate-200">Loading document...</p>
           </div>
         )}
 

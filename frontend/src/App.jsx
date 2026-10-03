@@ -6,10 +6,11 @@ import Sidebar from './components/Sidebar';
 import PdfViewer from './components/PdfViewer';
 import ChatWorkspace from './components/ChatWorkspace';
 import AuthModal from './components/AuthModal';
-import { UploadCloud, FileText, Sparkles, AlertCircle } from 'lucide-react';
+import { UploadCloud, FileText, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
+import docsleansIcon from './assets/docsleans-icon.png';
 
 export default function App() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const [theme, setTheme] = useState(localStorage.theme || 'light');
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [documents, setDocuments] = useState([]);
@@ -17,10 +18,26 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [pinnedContext, setPinnedContext] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [uploadingDocName, setUploadingDocName] = useState('');
+  const [uploadStage, setUploadStage] = useState(0);
   const [chatLoading, setChatLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
   const fileInputRef = useRef(null);
+
+  // Animate processing stages while uploading
+  useEffect(() => {
+    if (!uploading) {
+      setUploadStage(0);
+      return;
+    }
+    const timer1 = setTimeout(() => setUploadStage(1), 1800);
+    const timer2 = setTimeout(() => setUploadStage(2), 3800);
+    return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+    };
+  }, [uploading]);
 
   // Toggle Theme
   const toggleTheme = () => {
@@ -34,16 +51,46 @@ export default function App() {
     }
   };
 
-  // Load documents whenever user is authenticated
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  // Synchronized initial workspace loading: prevents intermediate flash
   useEffect(() => {
-    if (user) {
-      loadDocs();
-    } else {
+    if (loading) return; // Wait until AuthContext finishes checking token
+
+    if (!user) {
       setDocuments([]);
       setActiveDoc(null);
       setMessages([]);
+      setInitialLoading(false);
+      return;
     }
-  }, [user]);
+
+    let isMounted = true;
+    async function initUserWorkspace() {
+      try {
+        const docs = await fetchDocuments();
+        if (!isMounted) return;
+        setDocuments(docs);
+        if (docs.length > 0) {
+          const savedId = localStorage.getItem('doculens_active_doc_id');
+          const found = savedId ? docs.find((d) => String(d.id) === String(savedId)) : null;
+          setActiveDoc(found || docs[0]);
+        }
+      } catch (err) {
+        console.warn('Could not fetch documents:', err.message);
+      } finally {
+        if (isMounted) {
+          setInitialLoading(false);
+        }
+      }
+    }
+
+    initUserWorkspace();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user, loading]);
 
   // Load chat messages when active document changes
   useEffect(() => {
@@ -58,11 +105,20 @@ export default function App() {
     try {
       const docs = await fetchDocuments();
       setDocuments(docs);
-      if (docs.length > 0 && !activeDoc) {
-        setActiveDoc(docs[0]);
+      if (docs.length > 0) {
+        const savedId = localStorage.getItem('doculens_active_doc_id');
+        const found = savedId ? docs.find((d) => String(d.id) === String(savedId)) : null;
+        setActiveDoc(found || docs[0]);
       }
     } catch (err) {
       console.warn('Could not fetch documents:', err.message);
+    }
+  };
+
+  const handleSelectDoc = (doc) => {
+    setActiveDoc(doc);
+    if (doc?.id) {
+      localStorage.setItem('doculens_active_doc_id', doc.id);
     }
   };
 
@@ -82,15 +138,20 @@ export default function App() {
     }
 
     setUploading(true);
+    setUploadingDocName(file.name || 'document');
+    setUploadStage(0);
     setErrorMsg('');
     try {
       const newDoc = await uploadDocument(file);
+      // Attach local file to load instantly from RAM without waiting to re-download over HTTP
+      newDoc._localFile = file;
       setDocuments((prev) => [newDoc, ...prev]);
-      setActiveDoc(newDoc);
+      handleSelectDoc(newDoc);
     } catch (err) {
       setErrorMsg(err.message || 'Upload failed');
     } finally {
       setUploading(false);
+      setUploadingDocName('');
     }
   };
 
@@ -145,6 +206,27 @@ export default function App() {
     }
   };
 
+  if (initialLoading) {
+    return (
+      <div className="flex flex-col h-screen w-screen items-center justify-center bg-[#FAF9F5] dark:bg-slate-950 font-sans transition-colors">
+        <div className="flex flex-col items-center space-y-4">
+          <div className="relative flex items-center justify-center">
+            <img
+              src={docsleansIcon}
+              alt="docsLeans"
+              className="w-14 h-14 rounded-2xl shadow-lg shadow-blue-500/20 object-contain animate-pulse"
+            />
+            <div className="absolute -inset-2 border-2 border-blue-500/20 border-t-blue-600 rounded-3xl animate-spin"></div>
+          </div>
+          <div className="flex flex-col items-center">
+            <h1 className="text-base font-bold tracking-tight text-stone-900 dark:text-white">docsLeans</h1>
+            <p className="text-xs text-stone-400 dark:text-slate-500 mt-0.5">Restoring workspace session...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#FAF9F5] dark:bg-slate-950 font-sans">
       <Navbar
@@ -174,7 +256,7 @@ export default function App() {
           isOpen={!!user}
           documents={documents}
           activeDoc={activeDoc}
-          onSelectDoc={(doc) => setActiveDoc(doc)}
+          onSelectDoc={handleSelectDoc}
           onDeleteDoc={handleDeleteDoc}
           onUploadClick={() => fileInputRef.current?.click()}
         />
@@ -255,6 +337,82 @@ export default function App() {
           />
         )}
       </div>
+
+      {/* Upload & AI Processing Modal Animation */}
+      {uploading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs transition-opacity animate-in fade-in duration-200">
+          <div className="bg-[#FAF9F5] dark:bg-slate-900 border border-[#E7E5E0] dark:border-slate-800 rounded-3xl p-7 max-w-sm w-full mx-4 shadow-2xl flex flex-col items-center text-center relative overflow-hidden">
+            {/* Top gradient highlight bar */}
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-blue-500 via-indigo-500 to-sky-400 animate-pulse"></div>
+
+            {/* Glowing & bouncing logo animation */}
+            <div className="relative my-4 flex items-center justify-center">
+              <span className="absolute inline-flex h-20 w-20 rounded-2xl bg-blue-500/20 animate-ping"></span>
+              <div className="relative w-16 h-16 rounded-2xl bg-white dark:bg-slate-800 shadow-md flex items-center justify-center p-2.5 border border-blue-100 dark:border-blue-900/50">
+                <img
+                  src={docsleansIcon}
+                  alt="docsLeans"
+                  className="w-full h-full object-contain animate-bounce"
+                />
+              </div>
+            </div>
+
+            <h3 className="text-base font-bold text-stone-900 dark:text-white mt-1">
+              Processing Document
+            </h3>
+            {uploadingDocName && (
+              <p className="text-xs font-medium text-blue-600 dark:text-blue-400 truncate max-w-[260px] mt-0.5" title={uploadingDocName}>
+                {uploadingDocName}
+              </p>
+            )}
+
+            {/* Animated multi-stage progress indicator */}
+            <div className="w-full mt-5 bg-white/70 dark:bg-slate-800/60 rounded-2xl p-3 border border-stone-200/60 dark:border-slate-700/60 text-left space-y-2.5 text-xs">
+              {/* Step 1 */}
+              <div className="flex items-center space-x-2.5">
+                {uploadStage > 0 ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                ) : (
+                  <div className="w-4 h-4 rounded-full border-2 border-blue-600 border-t-transparent animate-spin flex-shrink-0"></div>
+                )}
+                <span className={uploadStage === 0 ? "font-semibold text-stone-800 dark:text-slate-200" : "text-stone-500 dark:text-slate-400"}>
+                  Extracting text & parsing pages
+                </span>
+              </div>
+
+              {/* Step 2 */}
+              <div className="flex items-center space-x-2.5">
+                {uploadStage > 1 ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                ) : uploadStage === 1 ? (
+                  <div className="w-4 h-4 rounded-full border-2 border-blue-600 border-t-transparent animate-spin flex-shrink-0"></div>
+                ) : (
+                  <div className="w-2 h-2 rounded-full bg-stone-300 dark:bg-slate-600 ml-1 mr-1 flex-shrink-0"></div>
+                )}
+                <span className={uploadStage === 1 ? "font-semibold text-stone-800 dark:text-slate-200" : "text-stone-500 dark:text-slate-400"}>
+                  Vectorizing embeddings with ChromaDB
+                </span>
+              </div>
+
+              {/* Step 3 */}
+              <div className="flex items-center space-x-2.5">
+                {uploadStage === 2 ? (
+                  <div className="w-4 h-4 rounded-full border-2 border-blue-600 border-t-transparent animate-spin flex-shrink-0"></div>
+                ) : (
+                  <div className="w-2 h-2 rounded-full bg-stone-300 dark:bg-slate-600 ml-1 mr-1 flex-shrink-0"></div>
+                )}
+                <span className={uploadStage === 2 ? "font-semibold text-stone-800 dark:text-slate-200" : "text-stone-500 dark:text-slate-400"}>
+                  Gemini synthesizing summary & topics
+                </span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-stone-400 dark:text-slate-500 mt-4">
+              Please wait while docsLeans prepares your document...
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Auth Modal */}
       <AuthModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} />
