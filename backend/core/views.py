@@ -13,6 +13,7 @@ from .serializers import (
     ChatMessageSerializer
 )
 from .rag_service import process_document, query_document
+from .graph_rag import rag_graph
 
 
 class RegisterView(generics.CreateAPIView):
@@ -116,19 +117,24 @@ class DocumentAskView(APIView):
             selected_context=selected_context
         )
 
-        # 2. Query RAG engine
+        # 2. Execute Day 9 LangGraph State Workflow (CRAG + Web Search Fallback + Self-RAG Local Guard)
         try:
-            rag_output = query_document(
-                user=request.user,
-                document_instance=document,
-                question=question,
-                selected_context=selected_context
-            )
+            initial_state = {
+                "user_id": request.user.id,
+                "document_id": document.id,
+                "filename": document.filename,
+                "question": question,
+                "original_question": question,
+                "selected_context": selected_context,
+                "retry_count": 0,
+                "generation_retry_count": 0,
+                "sources": []
+            }
+            graph_output = rag_graph.invoke(initial_state)
+            answer_text = graph_output.get("answer", "")
+            sources = graph_output.get("sources", [])
         except Exception as e:
-            return Response({"detail": f"Query error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        answer_text = rag_output.get("answer", "")
-        sources = rag_output.get("sources", [])
+            return Response({"detail": f"Graph workflow error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # 3. Save Assistant Chat Message
         bot_msg = ChatMessage.objects.create(
