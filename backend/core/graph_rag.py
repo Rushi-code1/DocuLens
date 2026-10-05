@@ -3,6 +3,9 @@ import operator
 from datetime import datetime
 from typing import TypedDict, List, Optional, Literal, Annotated
 
+import requests
+import concurrent.futures
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 from langchain_core.output_parsers import StrOutputParser
@@ -35,20 +38,35 @@ class BatchGradeDocuments(BaseModel):
 classifier_llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite",
     temperature=0.0,
-    max_output_tokens=256
+    max_output_tokens=256,
+    max_retries=1,
+    timeout=12
 )
 
 generator_llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite",
     temperature=0.2,
-    max_output_tokens=2048
+    max_output_tokens=2048,
+    max_retries=2,
+    timeout=15
+)
+
+# High-Speed Concise Web Search LLM (prevents lengthy generation delays)
+web_llm = ChatGoogleGenerativeAI(
+    model="gemini-3.1-flash-lite",
+    temperature=0.2,
+    max_output_tokens=350,
+    max_retries=2,
+    timeout=12
 )
 
 # Day 7: Lightweight Query Rewriter LLM (Cost & Token Guarded)
 rewriter_llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite",
     temperature=0.1,
-    max_output_tokens=128
+    max_output_tokens=128,
+    max_retries=1,
+    timeout=12
 )
 
 # Routing chain
@@ -69,9 +87,12 @@ router_chain = router_prompt | classifier_llm.with_structured_output(QueryRoute)
 batch_grader_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
-        "You are a fast document relevance grader. Evaluate all retrieved document chunks at once. "
-        "Identify which chunk indices contain facts or context relevant to answering the user question. "
-        "Be strict: return only the 0-based integer indices of relevant chunks. Return an empty list if none are relevant."
+        "You are an objective document relevance evaluator.\n"
+        "Your task is to check if any of the retrieved chunks contain the factual information to answer the user's question.\n"
+        "- If a chunk contains facts to answer the question, include its 0-based index.\n"
+        "- If a chunk is off-topic, discusses general ideas without answering the question, or does NOT contain the specific facts, consider it irrelevant.\n"
+        "- CRITICAL: If none of the retrieved chunks contain the answer to the question, return an empty list `[]`.\n"
+        "Return the list of 0-based integer indices in `relevant_chunk_indices`."
     ),
     (
         "human",
@@ -218,17 +239,48 @@ def direct_generate_node(state: RAGState) -> dict:
     }
 
 
+def is_document_scoped_query(q: str) -> bool:
+    """
+    Detects if the user's question is explicitly scoped to the uploaded document or report.
+    Whenever a question references the document, report, or asks for high-level synthesis
+    (e.g. 'What is the bottom line of this report?'), it MUST stay within the document
+    and NEVER trigger external web search fallback.
+    """
+    # 1. Direct references to the document, report, notes, or author
+    doc_refs = (
+        r'\b(this|the|my|our)\s+(document|documen|report|pdf|file|notes|paper|article|guide|text|study)\b'
+        r'|\b(in|from|of)\s+(this|here)\b'
+        r'|\b(author|uploaded|attached)\b'
+    )
+    if re.search(doc_refs, q, re.IGNORECASE):
+        return True
+
+    # 2. Holistic/Synthesizing questions (bottom line, summary, overview, takeaways, conclusion)
+    holistic = (
+        r'\b(bottom line|summar(y|ize|ise|ization)|overview|conclusion|takeaways?|main (points?|topics?|ideas?|themes?)|'
+        r'tl;?dr|core message|key findings?|what is this about)\b'
+    )
+    if re.search(holistic, q, re.IGNORECASE):
+        return True
+
+    return False
+
+
 def retrieve_node(state: RAGState) -> dict:
     """Queries ChromaDB with strict multi-tenant metadata isolation."""
     vectorstore = get_vectorstore()
     question = state["question"]
     focus_text = (state.get("selected_context") or "").strip()
+    filename = state.get("filename", "")
 
+    # For holistic document queries or document-wide requests, expand retrieval window
+    is_doc_scoped = is_document_scoped_query(question)
+    k_chunks = 6 if is_doc_scoped else 4
     search_query = f"{question} {focus_text[:200]}" if focus_text else question
 
     scored_docs = vectorstore.similarity_search_with_relevance_scores(
         search_query,
-        k=4,
+        k=k_chunks,
         filter={
             "$and": [
                 {"user_id": state["user_id"]},
@@ -256,7 +308,17 @@ def retrieve_node(state: RAGState) -> dict:
 
 
 def grade_documents_node(state: RAGState) -> dict:
-    """Evaluates retrieved chunks in a SINGLE PASS batch to eliminate sequential latency."""
+    """
+    Day 9: High-Speed Multi-Tier Relevance Gate (<1ms local decision).
+    Evaluates ChromaDB chunks using cosine confidence & document scoping:
+    - Tier 1: User-pinned context -> Instant 100% relevance (0ms).
+    - Tier 1.5: Document-scoped query (e.g. 'What is the bottom line of this report?', summaries)
+                -> Instant has_context (0ms, NEVER sent to web search).
+    - Tier 2: Confident vector match (score >= 0.58) -> Instant has_context (0ms).
+    - Tier 3: Low vector match (score < 0.52) -> Instant no_context (0ms, triggers web fallback).
+    - Tier 4: Ambiguous zone [0.52, 0.58) -> Fast lexical entity anchor check (0ms).
+    Eliminates slow cloud LLM round-trips that cause 504 timeouts and rate limits!
+    """
     question = state["question"]
     raw_docs = state.get("documents", [])
     chunk_scores = state.get("chunk_scores") or []
@@ -266,13 +328,14 @@ def grade_documents_node(state: RAGState) -> dict:
     if not raw_docs:
         return {
             "relevant_documents": [],
-            "relevance_status": "no_context"
+            "relevance_status": "no_context",
+            "sources": []
         }
 
     relevant_docs = []
     verified_sources = []
 
-    # Handle pinned focus text immediately (always relevant)
+    # Priority 1: Handle pinned focus text immediately (always relevant)
     non_focus_chunks = []
     for chunk in raw_docs:
         if focus_text and focus_text in chunk:
@@ -286,70 +349,86 @@ def grade_documents_node(state: RAGState) -> dict:
         else:
             non_focus_chunks.append(chunk)
 
-    # Fast-Path: If vector similarity is strong (top score >= 0.50), accept high-scoring chunks directly in 0ms!
     top_score = max(chunk_scores) if chunk_scores else 0.0
-    if top_score >= 0.50:
-        for i, chunk in enumerate(non_focus_chunks):
-            score = chunk_scores[i] if i < len(chunk_scores) else 0.0
-            if score >= 0.35:
-                relevant_docs.append(chunk)
-                verified_sources.append({
-                    "id": len(verified_sources) + 1,
-                    "content": chunk,
-                    "source": filename,
-                    "match": f"{int(score * 100)}%"
-                })
-        if relevant_docs:
-            return {
-                "relevant_documents": relevant_docs,
-                "relevance_status": "has_context",
-                "sources": verified_sources
-            }
 
-    if non_focus_chunks:
-        # Build numbered chunks string for single-pass evaluation
-        formatted_chunks = "\n\n".join([
-            f"[Chunk {idx}]:\n{chunk}"
-            for idx, chunk in enumerate(non_focus_chunks)
-        ])
-
-        try:
-            decision: BatchGradeDocuments = batch_grader_chain.invoke({
-                "question": question,
-                "formatted_chunks": formatted_chunks
-            })
-            valid_indices = set(decision.relevant_chunk_indices or [])
-            for idx, chunk in enumerate(non_focus_chunks):
-                if idx in valid_indices:
-                    relevant_docs.append(chunk)
-                    verified_sources.append({
-                        "id": len(verified_sources) + 1,
-                        "content": chunk,
-                        "source": filename,
-                        "match": "Verified"
-                    })
-        except Exception:
-            # On grader failure, retain chunks as fail-safe
-            for chunk in non_focus_chunks:
-                relevant_docs.append(chunk)
-                verified_sources.append({
-                    "id": len(verified_sources) + 1,
-                    "content": chunk,
-                    "source": filename,
-                    "match": "Relevant"
-                })
-
+    # If focus text was pinned by the user, we already have verified context
     if relevant_docs:
         return {
             "relevant_documents": relevant_docs,
             "relevance_status": "has_context",
             "sources": verified_sources
         }
-    else:
+
+    # Tier 1.5: Document-Scoped Query (e.g. 'What is the bottom line of this report?', summaries, etc.)
+    # CRITICAL RULE: NEVER route questions asking about 'this document / report' to external web search!
+    if is_document_scoped_query(question):
+        for idx, chunk in enumerate(non_focus_chunks):
+            relevant_docs.append(chunk)
+            verified_sources.append({
+                "id": len(verified_sources) + 1,
+                "content": chunk,
+                "source": filename,
+                "match": "Document"
+            })
+        return {
+            "relevant_documents": relevant_docs if relevant_docs else raw_docs,
+            "relevance_status": "has_context",
+            "sources": verified_sources
+        }
+
+    # Tier 2: Strong vector confidence (score >= 0.58) -> In-document query
+    if top_score >= 0.58:
+        for idx, chunk in enumerate(non_focus_chunks):
+            score = chunk_scores[idx] if idx < len(chunk_scores) else top_score
+            if score >= 0.55:
+                relevant_docs.append(chunk)
+                verified_sources.append({
+                    "id": len(verified_sources) + 1,
+                    "content": chunk,
+                    "source": filename,
+                    "match": "Verified"
+                })
+        return {
+            "relevant_documents": relevant_docs if relevant_docs else non_focus_chunks[:2],
+            "relevance_status": "has_context",
+            "sources": verified_sources if verified_sources else [{"id": 1, "content": non_focus_chunks[0], "source": filename, "match": "Verified"}]
+        }
+
+    # Tier 3: Low vector confidence (score < 0.52) -> Definitely out-of-document
+    if top_score < 0.52:
         return {
             "relevant_documents": [],
-            "relevance_status": "no_context"
+            "relevance_status": "no_context",
+            "sources": []
         }
+
+    # Tier 4: Ambiguous zone [0.52, 0.58) -> Check entity keyword presence
+    all_chunks_text = " ".join(non_focus_chunks).lower()
+    stop_words = {"what", "when", "where", "which", "who", "whom", "whose", "why", "how", "the", "and", "for", "are", "is", "can", "tell", "current", "2026", "with", "from"}
+    query_words = [w.lower() for w in re.findall(r'\b[a-zA-Z0-9_\.-]+\b', question) if w.lower() not in stop_words and len(w) > 2]
+    matched_words = [w for w in query_words if w in all_chunks_text]
+
+    # If more than 50% of the substantive keywords exist in the chunks
+    if query_words and (len(matched_words) / len(query_words)) >= 0.5:
+        for idx, chunk in enumerate(non_focus_chunks[:2]):
+            relevant_docs.append(chunk)
+            verified_sources.append({
+                "id": len(verified_sources) + 1,
+                "content": chunk,
+                "source": filename,
+                "match": "Verified"
+            })
+        return {
+            "relevant_documents": relevant_docs,
+            "relevance_status": "has_context",
+            "sources": verified_sources
+        }
+
+    return {
+        "relevant_documents": [],
+        "relevance_status": "no_context",
+        "sources": []
+    }
 
 
 def rewrite_query_node(state: RAGState) -> dict:
@@ -496,7 +575,9 @@ Strict Answer:"""
     strict_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-flash-lite",
         temperature=0.0,
-        max_output_tokens=2048
+        max_output_tokens=2048,
+        max_retries=1,
+        timeout=12
     )
 
     chain = strict_prompt | strict_llm | StrOutputParser()
@@ -513,6 +594,87 @@ Strict Answer:"""
     }
 
 
+def clean_search_query(q: str) -> str:
+    """Strips conversational phrases and temporal filler words while preserving search keywords and entities."""
+    pattern = r'^(what (is|are|was|were)( the| a| an)?|can you (tell|explain|find)( me)?|how much (is|are)|please (tell|give|show) me|tell me about|who is|where is|when was)\s+'
+    cleaned = re.sub(pattern, '', q.strip(), flags=re.I)
+    cleaned = re.sub(r'\b(current|latest|today|now)\b', '', cleaned, flags=re.I)
+    cleaned = re.sub(r'\?+$', '', cleaned).strip()
+    cleaned = ' '.join(cleaned.split())
+    return cleaned if len(cleaned) > 3 else q
+
+
+def fast_web_search(query: str, max_results: int = 3) -> list:
+    """
+    Sub-second fast web search using direct DDGS API with Bing fallback.
+    CRITICAL ZERO-LEAKAGE RULE: NEVER accept or send document excerpts, chunks, or filenames.
+    ONLY the clean, standalone user query is dispatched.
+    """
+    clean_q = clean_search_query(query)
+    results = []
+
+    # 1. Primary: DDGS api backend with hard 9.0s ceiling for high precision entity/pricing results
+    def _fetch_ddgs():
+        from ddgs import DDGS
+        with DDGS(timeout=8.0) as ddgs:
+            return list(ddgs.text(clean_q, backend="api", max_results=max_results))
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_fetch_ddgs)
+    try:
+        raw = future.result(timeout=9.0)
+        for r in raw:
+            results.append({
+                "title": r.get("title", "Web Result"),
+                "url": r.get("href", ""),
+                "snippet": (r.get("body") or "")[:300]
+            })
+    except Exception:
+        pass
+
+    # 2. Secondary fallback: Direct Bing parser (<1.2s)
+    if not results:
+        try:
+            session = requests.Session()
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            resp = session.get("https://www.bing.com/search", params={"q": clean_q}, headers=headers, timeout=2.5)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for li in soup.find_all("li", class_="b_algo")[:max_results]:
+                    h2 = li.find("h2")
+                    a = h2.find("a") if h2 else None
+                    snippet = li.find("p") or li.find("div", class_="b_caption")
+                    title = a.get_text().strip() if a else ""
+                    url = a.get("href", "").strip() if a else ""
+                    desc = snippet.get_text().strip() if snippet else ""
+                    if title and url:
+                        results.append({
+                            "title": title,
+                            "url": url,
+                            "snippet": desc[:300]
+                        })
+        except Exception:
+            pass
+
+    # 3. Tertiary fallback: Google Search
+    if not results:
+        try:
+            from googlesearch import search
+            for r in search(clean_q, num_results=max_results, advanced=True):
+                results.append({
+                    "title": getattr(r, "title", "Google Result"),
+                    "url": getattr(r, "url", ""),
+                    "snippet": (getattr(r, "description", "") or "")[:300]
+                })
+        except Exception:
+            pass
+
+    return results
+
+
 def web_search_node(state: RAGState) -> dict:
     """
     Day 8: Web Search Tool Fallback Node.
@@ -522,32 +684,7 @@ def web_search_node(state: RAGState) -> dict:
     query = state.get("original_question") or state["question"]
     filename = state.get("filename", "your document")
 
-    results = []
-    # Primary: ddgs (fast, high-quality, privacy-preserving)
-    try:
-        from ddgs import DDGS
-        raw = DDGS().text(query, max_results=3)
-        for r in raw:
-            results.append({
-                "title": r.get("title", "Web Result"),
-                "url": r.get("href", ""),
-                "snippet": r.get("body", "")
-            })
-    except Exception:
-        pass
-
-    # Secondary: googlesearch
-    if not results:
-        try:
-            from googlesearch import search
-            for r in search(query, num_results=3, advanced=True):
-                results.append({
-                    "title": getattr(r, "title", "Google Result"),
-                    "url": getattr(r, "url", ""),
-                    "snippet": getattr(r, "description", "")
-                })
-        except Exception:
-            pass
+    results = fast_web_search(query, max_results=3)
 
     # If no results found from web search, trigger honest fallback
     if not results:
@@ -568,8 +705,8 @@ The user's query could NOT be answered from their uploaded document ({filename})
 However, you have retrieved supplemental external web search results.
 
 CRITICAL INSTRUCTIONS:
-1. Clearly state upfront in 1 sentence that this specific detail was not found in {filename}, but you retrieved it from live web search.
-2. Answer the user's question accurately and concisely based strictly on the Web Results below.
+1. Clearly state upfront in 1 brief sentence that this specific detail was not found in {filename}, but was retrieved from live web search.
+2. Answer the user's question accurately and concisely in 2-3 sentences based strictly on the Web Results below.
 3. Reference the web sources or domains.
 
 Web Results:
@@ -581,7 +718,7 @@ User Question:
 Answer:"""
     )
 
-    rag_chain = web_rag_prompt | generator_llm | StrOutputParser()
+    rag_chain = web_rag_prompt | web_llm | StrOutputParser()
     answer_text = rag_chain.invoke({
         "web_context": web_context_str,
         "question": query,
@@ -627,18 +764,14 @@ def route_after_query_classification(state: RAGState) -> str:
 
 def route_after_grading(state: RAGState) -> str:
     """
-    Day 8 Dynamic Routing (CRAG with Web Search Fallback):
-    1. If relevant documents exist -> generate answer directly (0 extra tokens, 0 web calls).
-    2. If no context found AND retry_count < 1 -> rewrite query & retry retrieval.
-    3. If retry budget exhausted -> route to web_search_node (external fallback).
+    Dynamic Routing:
+    1. If relevant documents exist in ChromaDB -> generate answer directly.
+    2. If NO relevant chunks found in ChromaDB -> trigger the web search tool!
     """
     if state.get("relevance_status") == "has_context":
         return "generate"
 
-    retry_count = state.get("retry_count", 0)
-    if retry_count < 1:
-        return "rewrite_query"
-
+    # Immediately use the web search tool when related chunks are not found in ChromaDB
     return "web_search"
 
 
