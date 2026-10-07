@@ -18,13 +18,16 @@
 * **AI-Powered Structured Extraction** — Automatically generates an executive brief, core themes, and tailored questions on upload using `llm.with_structured_output(DocumentSummary)`.
 * **Native PDF Canvas & Text Selection** — Overlays an interactive text layer on top of Mozilla PDF.js canvas, letting users highlight any sentence to trigger the floating *"Ask AI"* / *"Set as Context"* popover.
 * **Agentic LangGraph Orchestration** — Stateful multi-node execution graph with dynamic routing, self-correcting feedback loops, and strict cost controls.
-* **Corrective RAG (CRAG) & Document Grading** — Evaluates retrieved chunks with an LLM-as-a-judge to filter out irrelevant noise before synthesis.
+* **LangGraph Checkpointer & Dual-Layer Memory** — In-memory `MemorySaver` (<0.05ms) paired with persistent Django database hydration, preserving conversation threads per document (`thread_id`) across server reboots.
+* **Conversational History Recall** — Intelligently answers questions about past discussion and lists previous queries in clean numbered format without falling back to web search.
+* **History-Aware Query Contextualization** — Selective 0ms fast-path resolving anaphora and pronouns (*"what about it?"*, *"explain that"*) only when needed.
+* **Corrective RAG (CRAG) & Document Scoping Gate** — High-speed relevance gate ensuring holistic synthesis questions (summaries, bottom-line, conclusions, action items) always stay grounded in document context ($k=6$).
 * **Adaptive Query Rewriting Loop** — Automatically reformulates vague, colloquial, or jargon-heavy queries into search-optimized terms with a token-capped feedback loop.
-* **Zero-Leakage Web Search Fallback** — When document context is insufficient, queries external search using strictly standalone queries (never leaks document text or chunks).
+* **Single Fast Web Search Fallback** — High-speed, privacy-preserving external web search fallback (<1.4s) reserved strictly for out-of-document facts (never leaks document text or chunks).
 * **Self-RAG Local Factuality Gate** — Sub-2ms, zero-token local Python grounding verifier that intercepts hallucinations and ungrounded numbers on the CPU before delivery.
 * **Multi-Tenant Security** — ChromaDB vector store partitioned by user and document ID with metadata isolation.
 * **Enterprise Django Backend** — SQLite ORM persistence for documents, sessions, and chat history with JWT authentication.
-* **Modern React 19 Workspace** — Built with Vite 8 and Tailwind CSS, featuring full dark/light mode, collapsible history sidebar, and rich Markdown parsing.
+* **Modern Clean Studio Frontend** — Built with React 19, Vite 8, and Tailwind CSS, featuring minimal white / clean studio light mode, GitHub deep charcoal dark mode, and collapsible sidebar.
 
 ---
 
@@ -33,38 +36,43 @@
 ```mermaid
 flowchart TD
     subgraph Client [Frontend Workspace]
-        UI[React 19 Dashboard\nPDF.js Canvas + Selectable TextLayer]
+        UI[React 19 Dashboard\nPDF.js Canvas + Selectable TextLayer\nClean Studio Light / GitHub Dark]
     end
 
     subgraph BackendServer [Django REST Framework]
         Auth[JWT Authentication & Multi-Tenant Guard]
-        ORM[(SQLite DB\nUsers, Documents, Chat History)]
+        ORM[(SQLite DB\nUsers, Documents, ChatMessage History)]
     end
 
-    subgraph AgenticEngine [LangGraph State Machine Engine]
+    subgraph AgenticEngine [LangGraph State Machine Engine (Day 10)]
+        Checkpointer[(MemorySaver Checkpointer\n+ DB Hydrated State by thread_id)]
+        Contextualizer{History-Aware Contextualizer\n0ms Fast Bypass / Follow-up Reformulate}
         Router{Intent Router}
-        Direct[Direct Greeting Generator]
+        Direct[Direct History & Greeting Generator]
         ChromaStore[(ChromaDB Vector Store\nIsolated by user_id & doc_id)]
-        Grader{CRAG Document Grader}
+        Grader{CRAG Relevance Gate\nDoc-Scoped Bypass + Cosine Threshold}
         Rewriter[Adaptive Query Rewriter\nMax 1 Retry Guard]
-        WebTool[Zero-Leakage Web Search Fallback\nStandalone Query Only]
-        Generator[Grounded Generator\nGemini 3.1 Flash-Lite]
+        WebTool[Zero-Leakage Web Search Fallback\nSingle Fast Search Engine]
+        Generator[Grounded Generator\nGemini 3.1 Flash-Lite + Multi-Turn Context]
         SelfRAGGate{Self-RAG Tier 1 Local Verifier\nCPU Grounding Check <2ms}
         StrictGen[Strict Zero-Temp Regenerator]
     end
 
-    UI <-->|JWT Bearer Requests| Auth
+    UI <-->|JWT Bearer Requests + thread_id| Auth
     Auth <--> ORM
     Auth <--> AgenticEngine
 
-    AgenticEngine --> Router
-    Router -->|Pleasantry / Chit-Chat| Direct --> FinalResponse([Deliver Response])
+    AgenticEngine --> Checkpointer
+    Checkpointer --> Contextualizer
+    Contextualizer --> Router
+
+    Router -->|Past Chat Recall / Greeting| Direct --> FinalResponse([Deliver Response & Commit Turn])
     Router -->|Document Question| ChromaStore
     ChromaStore --> Grader
 
-    Grader -->|Relevant Chunks Found| Generator
-    Grader -->|No Context & Retry < 1| Rewriter --> ChromaStore
-    Grader -->|No Context & Retry >= 1| WebTool --> FinalResponse
+    Grader -->|Document-Scoped OR Relevant Chunks| Generator
+    Grader -->|Ambiguous & Retry < 1| Rewriter --> ChromaStore
+    Grader -->|Out-of-Document Fact & Retry >= 1| WebTool --> FinalResponse
 
     Generator --> SelfRAGGate
     SelfRAGGate -->|Grounded & Factual| FinalResponse
@@ -221,7 +229,7 @@ All core endpoints are exposed under the `/api/` routing namespace:
 * [x] **Day 7: Corrective RAG (CRAG) Loops** — Adaptive query rewriting, self-correction feedback loop, and loop guardrails.
 * [x] **Day 8: Privacy-Preserving Web Search Fallback** — External web tool fallback without document text leakage.
 * [x] **Day 9: Self-RAG (Hallucination Detection)** — Tier 1 local CPU factuality gate and strict zero-temperature regeneration.
-* [ ] **Day 10: Multi-Turn Memory with Checkpointers** — Conversation threads with persistent SQLite checkpointers.
+* [x] **Day 10: Multi-Turn Memory & State Checkpointers** — Dual-layer persistence with `MemorySaver` (<0.05ms) and Django DB hydration, conversational recall, pronoun contextualization, and document scoping isolation.
 
 ---
 

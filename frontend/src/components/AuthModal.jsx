@@ -34,8 +34,8 @@ export default function AuthModal({ isOpen, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-stone-900/60 dark:bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-[#FAF9F5] dark:bg-slate-900 border border-[#E7E5E0] dark:border-slate-800 rounded-3xl p-7 max-w-sm w-full shadow-2xl relative transition-all">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-7 max-w-sm w-full shadow-2xl relative transition-all">
         {/* Header */}
         <div className="flex items-center space-x-2.5 mb-2">
           <img
@@ -44,10 +44,10 @@ export default function AuthModal({ isOpen, onClose }) {
             className="w-8 h-8 rounded-xl object-contain shadow-xs"
           />
           <div>
-            <h3 className="text-base font-semibold text-stone-900 dark:text-white">
+            <h3 className="text-base font-semibold text-slate-900 dark:text-white">
               {isRegister ? 'Create an Account' : 'Welcome to docsLeans'}
             </h3>
-            <p className="text-[11px] text-stone-500 dark:text-slate-400">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
               {isRegister ? 'Sign up to save your documents & chat history' : 'Sign in to access your saved documents'}
             </p>
           </div>
@@ -62,53 +62,53 @@ export default function AuthModal({ isOpen, onClose }) {
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-3">
           <div>
-            <label className="block text-[11px] font-medium text-stone-600 dark:text-slate-300 mb-1">
+            <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
               Username
             </label>
             <div className="relative">
-              <User className="w-4 h-4 text-stone-400 absolute left-3 top-2.5" />
+              <User className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
               <input
                 type="text"
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="e.g. alex"
-                className="w-full bg-[#EFECE6] dark:bg-slate-950 border border-[#D6D3CD] dark:border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-stone-800 dark:text-slate-100 placeholder-stone-400 focus:outline-none focus:border-blue-500"
+                className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>
 
           {isRegister && (
             <div>
-              <label className="block text-[11px] font-medium text-stone-600 dark:text-slate-300 mb-1">
+              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
                 Email Address (Optional)
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 text-stone-400 absolute left-3 top-2.5" />
+                <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="alex@example.com"
-                  className="w-full bg-[#EFECE6] dark:bg-slate-950 border border-[#D6D3CD] dark:border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-stone-800 dark:text-slate-100 placeholder-stone-400 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-500"
                 />
               </div>
             </div>
           )}
 
           <div>
-            <label className="block text-[11px] font-medium text-stone-600 dark:text-slate-300 mb-1">
+            <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
               Password
             </label>
             <div className="relative">
-              <Lock className="w-4 h-4 text-stone-400 absolute left-3 top-2.5" />
+              <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
               <input
                 type="password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full bg-[#EFECE6] dark:bg-slate-950 border border-[#D6D3CD] dark:border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-stone-800 dark:text-slate-100 placeholder-stone-400 focus:outline-none focus:border-blue-500"
+                className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>
@@ -123,8 +123,8 @@ export default function AuthModal({ isOpen, onClose }) {
           </button>
         </form>
 
-        <div className="mt-4 pt-3 border-t border-[#E7E5E0] dark:border-slate-800 text-center">
-          <p className="text-[11px] text-stone-500 dark:text-slate-400">
+        <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800 text-center">
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
             {isRegister ? 'Already have an account?' : "Don't have an account yet?"}{' '}
             <button
               type="button"

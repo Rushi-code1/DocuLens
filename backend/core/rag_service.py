@@ -181,6 +181,8 @@ def process_document(document_instance, content_bytes: bytes):
 def query_document(user, document_instance, question: str, selected_context: str = None):
     from .graph_rag import rag_graph
 
+    thread_id = f"user_{user.id}_doc_{document_instance.id}"
+    config = {"configurable": {"thread_id": thread_id}}
     initial_state = {
         "user_id": user.id,
         "document_id": document_instance.id,
@@ -191,8 +193,8 @@ def query_document(user, document_instance, question: str, selected_context: str
         "sources": [],
         "answer": ""
     }
-    # Execute graph
-    final_state = rag_graph.invoke(initial_state)
+    # Execute graph with thread-scoped memory
+    final_state = rag_graph.invoke(initial_state, config=config)
     return {
         "answer": final_state["answer"],
         "sources": final_state["sources"]

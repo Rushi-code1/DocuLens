@@ -344,7 +344,7 @@ export default function PdfViewer({
       part.toLowerCase() === searchQuery.toLowerCase() ? (
         <mark
           key={i}
-          className="bg-amber-200 dark:bg-amber-400 dark:text-slate-900 text-stone-900 px-0.5 rounded font-medium"
+          className="bg-amber-200 dark:bg-amber-400 dark:text-slate-900 text-slate-900 px-0.5 rounded font-medium"
         >
           {part}
         </mark>
@@ -355,19 +355,19 @@ export default function PdfViewer({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#FAF9F5] dark:bg-slate-900 transition-colors">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50 dark:bg-slate-900 transition-colors">
       {/* Viewer Toolbar */}
-      <div className="h-12 px-4 border-b border-[#E7E5E0] dark:border-slate-800 flex items-center justify-between flex-shrink-0 bg-[#FAF9F5] dark:bg-slate-900">
+      <div className="h-12 px-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between flex-shrink-0 bg-white dark:bg-slate-900">
         <div className="flex items-center space-x-2">
           {isPdf && (
-            <div className="flex items-center p-0.5 rounded-lg bg-[#EFECE6] dark:bg-slate-800 border border-[#D6D3CD] dark:border-slate-700 text-xs">
+            <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
               <button
                 type="button"
                 onClick={() => setViewMode('pdf')}
                 className={`flex items-center space-x-1 px-2.5 py-1 rounded-md transition-all ${
                   viewMode === 'pdf'
-                    ? 'bg-[#FAF9F5] dark:bg-slate-900 text-blue-600 dark:text-blue-400 font-semibold shadow-2xs'
-                    : 'text-stone-600 dark:text-slate-400 hover:text-stone-900'
+                    ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 font-semibold shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
                 }`}
               >
                 <Eye className="w-3.5 h-3.5" />
@@ -378,8 +378,8 @@ export default function PdfViewer({
                 onClick={() => setViewMode('text')}
                 className={`flex items-center space-x-1 px-2.5 py-1 rounded-md transition-all ${
                   viewMode === 'text'
-                    ? 'bg-[#FAF9F5] dark:bg-slate-900 text-blue-600 dark:text-blue-400 font-semibold shadow-2xs'
-                    : 'text-stone-600 dark:text-slate-400 hover:text-stone-900'
+                    ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 font-semibold shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
                 }`}
               >
                 <BookOpen className="w-3.5 h-3.5" />
@@ -388,14 +388,14 @@ export default function PdfViewer({
             </div>
           )}
 
-          <span className="text-[11px] text-stone-400 dark:text-slate-500">
+          <span className="text-[11px] text-slate-400 dark:text-slate-500">
             {docItem?.word_count ? `${docItem.word_count.toLocaleString()} words` : ''}
           </span>
         </div>
 
         {/* Find in Document */}
         <div className="relative">
-          <Search className="w-3.5 h-3.5 text-stone-400 absolute left-2.5 top-2" />
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
           <input
             type="text"
             value={searchQuery}
@@ -404,7 +404,7 @@ export default function PdfViewer({
               if (e.target.value) setViewMode('text');
             }}
             placeholder="Find in document..."
-            className="bg-[#EFECE6] dark:bg-slate-800 border border-[#D6D3CD] dark:border-slate-700 rounded-lg pl-8 pr-3 py-1 text-xs text-stone-800 dark:text-slate-200 focus:outline-none focus:border-blue-500 w-44 placeholder-stone-400"
+            className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg pl-8 pr-3 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-blue-500 w-44 placeholder-slate-400"
           />
         </div>
       </div>
@@ -412,23 +412,23 @@ export default function PdfViewer({
       {/* Viewer Main Body */}
       <div ref={containerRef} className="flex-1 overflow-y-auto relative">
         {loadingPdf && viewMode === 'pdf' && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#FAF9F5]/90 dark:bg-slate-900/90 backdrop-blur-xs text-stone-500 dark:text-slate-400 text-xs">
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/90 dark:bg-slate-900/90 backdrop-blur-xs text-slate-500 dark:text-slate-400 text-xs">
             <div className="w-7 h-7 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
-            <p className="font-medium text-stone-700 dark:text-slate-200">Loading document...</p>
+            <p className="font-medium text-slate-700 dark:text-slate-200">Loading document...</p>
           </div>
         )}
 
         {/* PDF.js Canvas & TextLayer Container */}
         <div
           ref={pagesContainerRef}
-          className={`${viewMode === 'pdf' ? 'flex' : 'hidden'} flex-col items-center p-4 bg-stone-200/50 dark:bg-slate-950 min-h-full`}
+          className={`${viewMode === 'pdf' ? 'flex' : 'hidden'} flex-col items-center p-4 bg-slate-100/70 dark:bg-slate-950 min-h-full`}
         >
           {/* Rendered pages inserted here */}
         </div>
 
         {/* Plain Text Reader Mode */}
         {viewMode === 'text' && (
-          <div className="p-8 max-w-3xl mx-auto doc-content text-[#292524] dark:text-slate-200 text-[14.5px] leading-relaxed whitespace-pre-wrap">
+          <div className="p-8 max-w-3xl mx-auto doc-content text-slate-900 dark:text-slate-200 text-[14.5px] leading-relaxed whitespace-pre-wrap">
             {highlightedText()}
           </div>
         )}
@@ -440,7 +440,7 @@ export default function PdfViewer({
           ref={popoverRef}
           style={{ top: `${popoverPos.top}px`, left: `${popoverPos.left}px` }}
           onMouseDown={(e) => e.preventDefault()}
-          className="fixed z-50 bg-[#292524] dark:bg-slate-800 text-white rounded-xl shadow-2xl px-2.5 py-1.5 flex items-center space-x-2 border border-stone-600 dark:border-slate-700 text-xs select-none"
+          className="fixed z-50 bg-slate-900 text-white rounded-xl shadow-2xl px-2.5 py-1.5 flex items-center space-x-2 border border-slate-700 dark:border-slate-700 text-xs select-none"
         >
           <button
             type="button"
@@ -448,19 +448,19 @@ export default function PdfViewer({
               onAskSection(selection);
               setSelection(null);
             }}
-            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg hover:bg-stone-800 text-blue-400 hover:text-blue-300 font-medium transition-colors"
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg hover:bg-slate-800 text-blue-400 hover:text-blue-300 font-medium transition-colors"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>Ask AI</span>
           </button>
-          <div className="h-3 w-px bg-stone-600"></div>
+          <div className="h-3 w-px bg-slate-700"></div>
           <button
             type="button"
             onClick={() => {
               onPinContext(selection);
               setSelection(null);
             }}
-            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg hover:bg-stone-800 text-amber-300 hover:text-amber-200 font-medium transition-colors"
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg hover:bg-slate-800 text-amber-300 hover:text-amber-200 font-medium transition-colors"
           >
             <Pin className="w-3.5 h-3.5" />
             <span>Set as Context</span>

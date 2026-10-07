@@ -208,7 +208,7 @@ export default function App() {
 
   if (initialLoading) {
     return (
-      <div className="flex flex-col h-screen w-screen items-center justify-center bg-[#FAF9F5] dark:bg-slate-950 font-sans transition-colors">
+      <div className="flex flex-col h-screen w-screen items-center justify-center bg-slate-50 dark:bg-slate-950 font-sans transition-colors">
         <div className="flex flex-col items-center space-y-4">
           <div className="relative flex items-center justify-center">
             <img
@@ -219,8 +219,8 @@ export default function App() {
             <div className="absolute -inset-2 border-2 border-blue-500/20 border-t-blue-600 rounded-3xl animate-spin"></div>
           </div>
           <div className="flex flex-col items-center">
-            <h1 className="text-base font-bold tracking-tight text-stone-900 dark:text-white">docsLeans</h1>
-            <p className="text-xs text-stone-400 dark:text-slate-500 mt-0.5">Restoring workspace session...</p>
+            <h1 className="text-base font-bold tracking-tight text-slate-900 dark:text-white">docsLeans</h1>
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Restoring workspace session...</p>
           </div>
         </div>
       </div>
@@ -228,7 +228,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#FAF9F5] dark:bg-slate-950 font-sans">
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans">
       <Navbar
         activeDoc={activeDoc}
         theme={theme}
@@ -281,7 +281,7 @@ export default function App() {
             />
           ) : (
             /* Upload Hero Screen */
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#FAF9F5] dark:bg-slate-950">
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50 dark:bg-slate-950">
               <div
                 onClick={() => {
                   if (!user) {
@@ -297,7 +297,7 @@ export default function App() {
                     handleFileUpload(e.dataTransfer.files[0]);
                   }
                 }}
-                className="max-w-md w-full border-2 border-dashed border-stone-300 dark:border-slate-800 hover:border-blue-500 rounded-3xl p-10 cursor-pointer bg-white/50 dark:bg-slate-900/40 hover:bg-blue-50/20 dark:hover:bg-blue-950/20 transition-all flex flex-col items-center shadow-xs"
+                className="max-w-md w-full border-2 border-dashed border-slate-300 dark:border-slate-800 hover:border-blue-500 rounded-3xl p-10 cursor-pointer bg-white/70 dark:bg-slate-900/40 hover:bg-blue-50/20 dark:hover:bg-blue-950/20 transition-all flex flex-col items-center shadow-xs"
               >
                 <div className="w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center mb-4 shadow-2xs">
                   {uploading ? (
@@ -307,10 +307,10 @@ export default function App() {
                   )}
                 </div>
 
-                <h3 className="text-base font-semibold text-stone-900 dark:text-white mb-1">
+                <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">
                   {uploading ? 'Analyzing Document with Gemini...' : 'Drop your document here'}
                 </h3>
-                <p className="text-xs text-stone-500 dark:text-slate-400 mb-4">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
                   Upload PDF, Markdown, or Text. Generates an instant executive brief and interactive reader.
                 </p>
 
@@ -341,14 +341,14 @@ export default function App() {
       {/* Upload & AI Processing Modal Animation */}
       {uploading && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs transition-opacity animate-in fade-in duration-200">
-          <div className="bg-[#FAF9F5] dark:bg-slate-900 border border-[#E7E5E0] dark:border-slate-800 rounded-3xl p-7 max-w-sm w-full mx-4 shadow-2xl flex flex-col items-center text-center relative overflow-hidden">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-7 max-w-sm w-full mx-4 shadow-2xl flex flex-col items-center text-center relative overflow-hidden">
             {/* Top gradient highlight bar */}
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-blue-500 via-indigo-500 to-sky-400 animate-pulse"></div>
 
             {/* Glowing & bouncing logo animation */}
             <div className="relative my-4 flex items-center justify-center">
               <span className="absolute inline-flex h-20 w-20 rounded-2xl bg-blue-500/20 animate-ping"></span>
-              <div className="relative w-16 h-16 rounded-2xl bg-white dark:bg-slate-800 shadow-md flex items-center justify-center p-2.5 border border-blue-100 dark:border-blue-900/50">
+              <div className="relative w-16 h-16 rounded-2xl bg-slate-50 dark:bg-slate-800 shadow-md flex items-center justify-center p-2.5 border border-blue-100 dark:border-blue-900/50">
                 <img
                   src={docsleansIcon}
                   alt="docsLeans"
@@ -357,7 +357,7 @@ export default function App() {
               </div>
             </div>
 
-            <h3 className="text-base font-bold text-stone-900 dark:text-white mt-1">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white mt-1">
               Processing Document
             </h3>
             {uploadingDocName && (
@@ -367,7 +367,7 @@ export default function App() {
             )}
 
             {/* Animated multi-stage progress indicator */}
-            <div className="w-full mt-5 bg-white/70 dark:bg-slate-800/60 rounded-2xl p-3 border border-stone-200/60 dark:border-slate-700/60 text-left space-y-2.5 text-xs">
+            <div className="w-full mt-5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl p-3 border border-slate-200/80 dark:border-slate-700/60 text-left space-y-2.5 text-xs">
               {/* Step 1 */}
               <div className="flex items-center space-x-2.5">
                 {uploadStage > 0 ? (
@@ -375,7 +375,7 @@ export default function App() {
                 ) : (
                   <div className="w-4 h-4 rounded-full border-2 border-blue-600 border-t-transparent animate-spin flex-shrink-0"></div>
                 )}
-                <span className={uploadStage === 0 ? "font-semibold text-stone-800 dark:text-slate-200" : "text-stone-500 dark:text-slate-400"}>
+                <span className={uploadStage === 0 ? "font-semibold text-slate-800 dark:text-slate-200" : "text-slate-500 dark:text-slate-400"}>
                   Extracting text & parsing pages
                 </span>
               </div>
@@ -387,9 +387,9 @@ export default function App() {
                 ) : uploadStage === 1 ? (
                   <div className="w-4 h-4 rounded-full border-2 border-blue-600 border-t-transparent animate-spin flex-shrink-0"></div>
                 ) : (
-                  <div className="w-2 h-2 rounded-full bg-stone-300 dark:bg-slate-600 ml-1 mr-1 flex-shrink-0"></div>
+                  <div className="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-600 ml-1 mr-1 flex-shrink-0"></div>
                 )}
-                <span className={uploadStage === 1 ? "font-semibold text-stone-800 dark:text-slate-200" : "text-stone-500 dark:text-slate-400"}>
+                <span className={uploadStage === 1 ? "font-semibold text-slate-800 dark:text-slate-200" : "text-slate-500 dark:text-slate-400"}>
                   Vectorizing embeddings with ChromaDB
                 </span>
               </div>
@@ -399,15 +399,15 @@ export default function App() {
                 {uploadStage === 2 ? (
                   <div className="w-4 h-4 rounded-full border-2 border-blue-600 border-t-transparent animate-spin flex-shrink-0"></div>
                 ) : (
-                  <div className="w-2 h-2 rounded-full bg-stone-300 dark:bg-slate-600 ml-1 mr-1 flex-shrink-0"></div>
+                  <div className="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-600 ml-1 mr-1 flex-shrink-0"></div>
                 )}
-                <span className={uploadStage === 2 ? "font-semibold text-stone-800 dark:text-slate-200" : "text-stone-500 dark:text-slate-400"}>
+                <span className={uploadStage === 2 ? "font-semibold text-slate-800 dark:text-slate-200" : "text-slate-500 dark:text-slate-400"}>
                   Gemini synthesizing summary & topics
                 </span>
               </div>
             </div>
 
-            <p className="text-[11px] text-stone-400 dark:text-slate-500 mt-4">
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-4">
               Please wait while docsLeans prepares your document...
             </p>
           </div>

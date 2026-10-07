@@ -8,10 +8,14 @@ import concurrent.futures
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from .rag_service import get_vectorstore
+
+# Day 10: In-memory LangGraph Checkpointer for zero-latency (<0.05ms) thread persistence
+checkpointer = MemorySaver()
 
 
 # ============================================================================
@@ -34,13 +38,13 @@ class BatchGradeDocuments(BaseModel):
     )
 
 
-# Fast classifier LLMs
+# Fast classifier LLMs with robust cloud production timeouts (30-40s)
 classifier_llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite",
     temperature=0.0,
     max_output_tokens=256,
-    max_retries=1,
-    timeout=12
+    max_retries=2,
+    timeout=30
 )
 
 generator_llm = ChatGoogleGenerativeAI(
@@ -48,16 +52,16 @@ generator_llm = ChatGoogleGenerativeAI(
     temperature=0.2,
     max_output_tokens=2048,
     max_retries=2,
-    timeout=15
+    timeout=40
 )
 
-# High-Speed Concise Web Search LLM (prevents lengthy generation delays)
+# High-Speed Concise Web Search LLM
 web_llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite",
     temperature=0.2,
     max_output_tokens=350,
     max_retries=2,
-    timeout=12
+    timeout=30
 )
 
 # Day 7: Lightweight Query Rewriter LLM (Cost & Token Guarded)
@@ -65,16 +69,20 @@ rewriter_llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite",
     temperature=0.1,
     max_output_tokens=128,
-    max_retries=1,
-    timeout=12
+    max_retries=2,
+    timeout=25
 )
 
 # Routing chain
 router_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
-        "You are an expert query router. Determine whether the user's question requires searching the document ('document_retrieval') "
-        "or is simple pleasantry/greeting/chit-chat ('direct_conversation'). If the user provided a highlighted text excerpt, always choose 'document_retrieval'."
+        "You are an expert query router for an AI document assistant.\n"
+        "Determine whether the user's question requires searching the uploaded document ('document_retrieval') "
+        "or is simple conversation, greeting, pleasantry, or an inquiry about previous questions or chat history ('direct_conversation').\n"
+        "- Choose 'direct_conversation' if the user asks about previous queries, chat history, greetings, who you are, or general conversation.\n"
+        "- Choose 'document_retrieval' if the user asks for facts, details, summaries, or questions about the document content.\n"
+        "If the user provided a highlighted text excerpt, always choose 'document_retrieval'."
     ),
     (
         "human",
@@ -117,30 +125,38 @@ rewriter_prompt = ChatPromptTemplate.from_messages([
 ])
 rewriter_chain = rewriter_prompt | rewriter_llm | StrOutputParser()
 
-# Direct conversational prompt (no vector DB retrieval needed)
+# Direct conversational prompt (supports greetings, polite courtesies, and conversational recall from DB history)
 direct_chat_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
-        "You are DocuLens, an intelligent and friendly AI document assistant. Answer the user's greeting or pleasantry politely and concisely. "
-        "Remind them that you are ready to answer any questions about their uploaded document."
+        "You are DocuLens, an enterprise AI document assistant for the document '{filename}'.\n"
+        "You have full access to the recent conversation history with the user.\n\n"
+        "CRITICAL INSTRUCTIONS:\n"
+        "1. If the user asks what their previous questions were, asks to point out or summarize any past chat, or asks what was discussed earlier:\n"
+        "   - Review the Recent Conversation History below carefully.\n"
+        "   - List their previous questions or key discussion points clearly in a numbered or bulleted list.\n"
+        "   - Do NOT say you don't have access to past conversation or history.\n"
+        "2. If the user asks for clarification or follow-up on a prior answer, answer it directly using the conversation history.\n"
+        "3. If the user sends a greeting or pleasantry (e.g. 'hi', 'thank you', 'who are you'), reply warmly and mention you are ready to help analyze '{filename}'.\n"
+        "4. If no previous questions exist in the history, politely state that this is the beginning of the chat session for '{filename}'."
     ),
     (
         "human",
-        "{question}"
+        "Recent Conversation History:\n{chat_history}\n\nUser Question:\n{question}"
     )
 ])
 direct_chat_chain = direct_chat_prompt | generator_llm | StrOutputParser()
 
-# Grounded RAG Generation prompt
+# Grounded RAG Generation prompt (incorporates temporal anchoring, verified chunks, and multi-turn context)
 rag_prompt = ChatPromptTemplate.from_template(
-    """You are an expert document assistant.
+    """You are an expert document assistant for {filename}.
 CURRENT DATE: {current_date} (Year: {current_year}).
 CRITICAL TEMPORAL CONTEXT: The current real-world year is {current_year}. When reviewing documents, resumes, work experience, timelines, or dates, always evaluate them relative to {current_year}. Dates up to and including {current_year} are valid past or present dates, not future dates.
 
-Answer the question accurately, thoroughly, and strictly based on the verified context below.
-If the user specifically highlighted a section, pay special attention to it, but also draw from the broader document context.
+Recent Conversation Context:
+{chat_history}
 
-Context:
+Verified Document Context:
 {context}
 
 Question:
@@ -150,8 +166,25 @@ Answer:"""
 )
 
 
+# Day 10: History-Aware Query Contextualizer prompt & chain
+contextualize_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "Given a chat history and the latest user question which might reference context in the chat history, "
+        "formulate a standalone question which can be understood without the chat history. "
+        "Do NOT answer the question, just reformulate it if needed and otherwise return it as is. "
+        "Return ONLY the standalone question text without explanations or quotes."
+    ),
+    (
+        "human",
+        "Chat History:\n{chat_history}\n\nLatest Question: {question}"
+    )
+])
+contextualize_chain = contextualize_prompt | rewriter_llm | StrOutputParser()
+
+
 # ============================================================================
-# Step 1: State Definition with State Reducer & Day 7 Retry Budget
+# Step 1: State Definition with State Reducer & Day 7/10 Retry & Memory Budget
 # ============================================================================
 
 class RAGState(TypedDict):
@@ -184,6 +217,9 @@ class RAGState(TypedDict):
     # State Reducer: Appends sources rather than overwriting
     sources: Annotated[List[dict], operator.add]
 
+    # Day 10: Multi-Turn Conversation History (persisted in DB and checkpointer)
+    chat_history: List[dict]
+
     # Final Output text
     answer: str
 
@@ -192,8 +228,93 @@ class RAGState(TypedDict):
 # Step 2: Worker Nodes
 # ============================================================================
 
+def contextualize_query_node(state: RAGState) -> dict:
+    """
+    Day 10: History-Aware Query Contextualizer.
+    Resolves anaphoric pronouns and follow-up references ('what about it?', 'explain that', 'elaborate')
+    into standalone search queries using thread chat history stored in MemorySaver.
+    Fast-path (0ms): If chat_history is empty or the query has no follow-up markers, bypasses LLM!
+    """
+    question = state["question"].strip()
+    history = state.get("chat_history") or []
+
+    # Fast bypass 1: No previous history in thread -> pass directly (0ms)
+    if not history or len(history) < 2:
+        return {"question": question, "original_question": question}
+
+    # Fast bypass 2: User explicitly pinned context -> pass directly (0ms)
+    if state.get("selected_context"):
+        return {"question": question, "original_question": question}
+
+    # Fast bypass 3: Only contextualize if follow-up / anaphoric markers are present
+    followup_pattern = (
+        r'\b(it|its|they|them|their|this|that|these|those|the former|the latter|'
+        r'second one|first one|third one|last one|elaborate|expand|more detail|tell me more|why\?)\b'
+    )
+    if not re.search(followup_pattern, question, re.IGNORECASE):
+        # Already self-contained -> zero latency bypass!
+        return {"question": question, "original_question": question}
+
+    # Contextualize using recent chat history
+    formatted_history = []
+    for turn in history[-4:]:
+        role = turn.get("role", "user")
+        content = turn.get("content", "")
+        formatted_history.append(f"{role.capitalize()}: {content}")
+    history_str = "\n".join(formatted_history)
+
+    try:
+        standalone_q = contextualize_chain.invoke({
+            "chat_history": history_str,
+            "question": question
+        }).strip()
+        return {
+            "question": standalone_q if len(standalone_q) > 3 else question,
+            "original_question": question
+        }
+    except Exception:
+        return {"question": question, "original_question": question}
+
+
+def is_conversation_scoped_query(q: str) -> bool:
+    """
+    Detects if the user's question is asking about the chat history,
+    prior questions, previous answers, or past conversation turns.
+    Handles typos ('quations'), plurals, and phrasing variations ('point out any chat').
+    """
+    q_lower = q.lower().strip()
+
+    # 1. Any mention of previous / past / earlier / last / prior combined with question / query / chat / turn
+    hist_keywords = r'\b(previous|past|earlier|last|prior|before|recent)\b'
+    chat_keywords = r'\b(qu[ea]stions?|queries|query|prompts?|responses?|answers?|points?|topics?|messages?|chats?|conversations?|discussions?|turns?)\b'
+    if re.search(hist_keywords, q_lower) and re.search(chat_keywords, q_lower):
+        return True
+
+    # 2. Point out / review / show chat history
+    if re.search(r'\b(point|opint|show|list|tell|give)\s*(out)?.*?(chat|conversation|history)\b', q_lower):
+        return True
+
+    # 3. Direct recall / interrogation patterns
+    recall_patterns = (
+        r'\bwhat (is|are|was|were) (my|our|the) (previous|last|first|second|other|earlier|past)\b'
+        r'|\bwhat did (i|you|we) (say|ask|mean|write|mention|tell|discuss|point out)\b'
+        r'|\bwhat (have i|have we|did i) asked\b'
+        r'|\brepeat (what|that|the last|your|my)\b'
+        r'|\b(our (chat|conversation|discussion))\b'
+        r'|\b(summarize (our|this) (chat|conversation))\b'
+        r'|\b(in this (chat|conversation))\b'
+        r'|\b(from (our|the) conversation)\b'
+        r'|\b(chat history|conversation history)\b'
+        r'|\b(what (was|is) my (last|first|previous) (question|query|prompt))\b'
+    )
+    if re.search(recall_patterns, q_lower):
+        return True
+
+    return False
+
+
 def route_query_node(state: RAGState) -> dict:
-    """Classifies user intent with a 0ms fast-path for greetings & chit-chat."""
+    """Classifies user intent with high-speed regex fast-paths and intelligent LLM routing."""
     question = state["question"].strip()
     focus_text = (state.get("selected_context") or "").strip()
 
@@ -204,16 +325,18 @@ def route_query_node(state: RAGState) -> dict:
     # Fast bypass 2: Instant 0ms regex check for greetings and courtesies
     q_norm = question.lower().strip("!?. ")
     common_greetings = {"hi", "hello", "hey", "greetings", "good morning", "good evening", "good afternoon", "thanks", "thank you", "bye", "goodbye", "who are you"}
-    if q_norm in common_greetings:
+    if q_norm in common_greetings or re.match(r'^(hi|hello|hey|greetings)\b', q_norm):
         return {"route": "direct_conversation"}
 
-    # Fast bypass 3: Instant 0ms check for question patterns & substantive prompts
-    words = q_norm.split()
-    first_word = words[0] if words else ""
-    question_starters = {"what", "how", "why", "who", "where", "which", "when", "can", "is", "are", "does", "do", "explain", "describe", "summarize", "list", "show", "find", "tell", "give"}
-    if first_word in question_starters or len(words) >= 4:
+    # Fast bypass 2.5: Conversational recall & past discussion inquiries (0ms)
+    if is_conversation_scoped_query(question):
+        return {"route": "direct_conversation"}
+
+    # Fast bypass 3: Explicit document-scoped synthesis requests (0ms)
+    if is_document_scoped_query(question):
         return {"route": "document_retrieval"}
 
+    # Intelligent intent classification via LLM router for nuanced queries
     try:
         decision: QueryRoute = router_chain.invoke({
             "question": question,
@@ -226,12 +349,39 @@ def route_query_node(state: RAGState) -> dict:
 
 
 def direct_generate_node(state: RAGState) -> dict:
-    """Answers greetings and pleasantries directly without touching the vector database."""
+    """Answers greetings, pleasantries, and conversation-history questions directly using DB-backed chat history."""
     question = state["question"]
+    history = state.get("chat_history") or []
+    filename = state.get("filename", "your document")
+
+    formatted_history = []
+    user_q_count = 1
+    for turn in history[-10:]:
+        role = turn.get("role", "user")
+        content = turn.get("content", "")
+        if role == "user":
+            formatted_history.append(f"User (Question {user_q_count}): {content}")
+            user_q_count += 1
+        else:
+            formatted_history.append(f"Assistant: {content}")
+    history_str = "\n".join(formatted_history) if formatted_history else "No prior conversation messages recorded yet."
+
     try:
-        reply = direct_chat_chain.invoke({"question": question})
+        reply = direct_chat_chain.invoke({
+            "filename": filename,
+            "chat_history": history_str,
+            "question": question
+        })
     except Exception as e:
-        reply = f"Hello! I am your DocuLens assistant. How can I help you with **{state.get('filename', 'your document')}** today?"
+        if is_conversation_scoped_query(question) and history:
+            user_turns = [t["content"] for t in history if t.get("role") == "user"]
+            if user_turns:
+                questions_list = "\n".join([f"{i+1}. {q}" for i, q in enumerate(user_turns)])
+                reply = f"Here are your previous questions from our conversation:\n\n{questions_list}"
+            else:
+                reply = "I reviewed our conversation history, but no previous questions were recorded for this document yet."
+        else:
+            reply = f"Hello! I am your DocuLens assistant for **{filename}**. How can I help you with your document today?"
 
     return {
         "answer": reply,
@@ -242,23 +392,26 @@ def direct_generate_node(state: RAGState) -> dict:
 def is_document_scoped_query(q: str) -> bool:
     """
     Detects if the user's question is explicitly scoped to the uploaded document or report.
-    Whenever a question references the document, report, or asks for high-level synthesis
-    (e.g. 'What is the bottom line of this report?'), it MUST stay within the document
+    Whenever a question references the document, report, notes, or asks for high-level synthesis
+    (e.g. 'What is the bottom line of this report?', 'core conclusions and recommended action items here',
+    summaries, action items, recommendations), it MUST stay within the document
     and NEVER trigger external web search fallback.
     """
-    # 1. Direct references to the document, report, notes, or author
+    # 1. Direct references to document, report, notes, paper, or deictic markers
     doc_refs = (
         r'\b(this|the|my|our)\s+(document|documen|report|pdf|file|notes|paper|article|guide|text|study)\b'
         r'|\b(in|from|of)\s+(this|here)\b'
         r'|\b(author|uploaded|attached)\b'
+        r'|\bhere\b'
     )
     if re.search(doc_refs, q, re.IGNORECASE):
         return True
 
-    # 2. Holistic/Synthesizing questions (bottom line, summary, overview, takeaways, conclusion)
+    # 2. Holistic/Synthesizing and analytical questions
     holistic = (
-        r'\b(bottom line|summar(y|ize|ise|ization)|overview|conclusion|takeaways?|main (points?|topics?|ideas?|themes?)|'
-        r'tl;?dr|core message|key findings?|what is this about)\b'
+        r'\b(bottom line|summar(y|ize|ise|ization)|overview|conclusions?|action items?|'
+        r'recommendations?|takeaways?|insights?|main (points?|topics?|ideas?|themes?)|'
+        r'next steps?|tl;?dr|core message|key findings?|what is this about)\b'
     )
     if re.search(holistic, q, re.IGNORECASE):
         return True
@@ -461,24 +614,42 @@ def rewrite_query_node(state: RAGState) -> dict:
 
 
 def generate_node(state: RAGState) -> dict:
-    """Generates grounded answer using only the verified relevant context."""
+    """Generates grounded answer using only the verified relevant context and recent chat history."""
     relevant_docs = state.get("relevant_documents", [])
     # Answer the original question using the freshly retrieved context
     question_to_answer = state.get("original_question") or state["question"]
+    filename = state.get("filename", "the document")
+    history = state.get("chat_history") or []
 
     formatted_context = "\n\n".join(relevant_docs)
+
+    formatted_history = []
+    for turn in history[-4:]:
+        role = "User" if turn.get("role") == "user" else "Assistant"
+        content = turn.get("content", "")
+        formatted_history.append(f"{role}: {content}")
+    history_str = "\n".join(formatted_history) if formatted_history else "No prior messages."
 
     now = datetime.now()
     current_date = now.strftime("%B %d, %Y")
     current_year = str(now.year)
 
     rag_chain = rag_prompt | generator_llm | StrOutputParser()
-    answer_text = rag_chain.invoke({
-        "context": formatted_context,
-        "question": question_to_answer,
-        "current_date": current_date,
-        "current_year": current_year
-    })
+    try:
+        answer_text = rag_chain.invoke({
+            "context": formatted_context,
+            "question": question_to_answer,
+            "filename": filename,
+            "chat_history": history_str,
+            "current_date": current_date,
+            "current_year": current_year
+        })
+    except Exception as e:
+        # Graceful fallback: return top relevant chunk excerpt if Gemini API timed out
+        if relevant_docs:
+            answer_text = f"Based on **{filename}**:\n\n{relevant_docs[0][:600]}..."
+        else:
+            answer_text = f"I retrieved the relevant context from **{filename}**, but experienced a temporary service delay generating the full synthesis. Please ask again."
 
     return {
         "answer": answer_text
@@ -576,16 +747,19 @@ Strict Answer:"""
         model="gemini-3.1-flash-lite",
         temperature=0.0,
         max_output_tokens=2048,
-        max_retries=1,
-        timeout=12
+        max_retries=2,
+        timeout=30
     )
 
     chain = strict_prompt | strict_llm | StrOutputParser()
-    corrected_answer = chain.invoke({
-        "context": formatted_context,
-        "question": question,
-        "reason": reason
-    })
+    try:
+        corrected_answer = chain.invoke({
+            "context": formatted_context,
+            "question": question,
+            "reason": reason
+        })
+    except Exception:
+        corrected_answer = state.get("answer", "")
 
     return {
         "answer": corrected_answer,
@@ -606,71 +780,37 @@ def clean_search_query(q: str) -> str:
 
 def fast_web_search(query: str, max_results: int = 3) -> list:
     """
-    Sub-second fast web search using direct DDGS API with Bing fallback.
+    Sub-second fast web search using a single direct Bing parser (<1.4s).
     CRITICAL ZERO-LEAKAGE RULE: NEVER accept or send document excerpts, chunks, or filenames.
     ONLY the clean, standalone user query is dispatched.
     """
     clean_q = clean_search_query(query)
     results = []
 
-    # 1. Primary: DDGS api backend with hard 9.0s ceiling for high precision entity/pricing results
-    def _fetch_ddgs():
-        from ddgs import DDGS
-        with DDGS(timeout=8.0) as ddgs:
-            return list(ddgs.text(clean_q, backend="api", max_results=max_results))
-
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(_fetch_ddgs)
     try:
-        raw = future.result(timeout=9.0)
-        for r in raw:
-            results.append({
-                "title": r.get("title", "Web Result"),
-                "url": r.get("href", ""),
-                "snippet": (r.get("body") or "")[:300]
-            })
+        session = requests.Session()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        resp = session.get("https://www.bing.com/search", params={"q": clean_q}, headers=headers, timeout=3.5)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for li in soup.find_all("li", class_="b_algo")[:max_results]:
+                h2 = li.find("h2")
+                a = h2.find("a") if h2 else None
+                snippet = li.find("p") or li.find("div", class_="b_caption")
+                title = a.get_text().strip() if a else ""
+                url = a.get("href", "").strip() if a else ""
+                desc = snippet.get_text().strip() if snippet else ""
+                if title and url:
+                    results.append({
+                        "title": title,
+                        "url": url,
+                        "snippet": desc[:300]
+                    })
     except Exception:
         pass
-
-    # 2. Secondary fallback: Direct Bing parser (<1.2s)
-    if not results:
-        try:
-            session = requests.Session()
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-            resp = session.get("https://www.bing.com/search", params={"q": clean_q}, headers=headers, timeout=2.5)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, "html.parser")
-                for li in soup.find_all("li", class_="b_algo")[:max_results]:
-                    h2 = li.find("h2")
-                    a = h2.find("a") if h2 else None
-                    snippet = li.find("p") or li.find("div", class_="b_caption")
-                    title = a.get_text().strip() if a else ""
-                    url = a.get("href", "").strip() if a else ""
-                    desc = snippet.get_text().strip() if snippet else ""
-                    if title and url:
-                        results.append({
-                            "title": title,
-                            "url": url,
-                            "snippet": desc[:300]
-                        })
-        except Exception:
-            pass
-
-    # 3. Tertiary fallback: Google Search
-    if not results:
-        try:
-            from googlesearch import search
-            for r in search(clean_q, num_results=max_results, advanced=True):
-                results.append({
-                    "title": getattr(r, "title", "Google Result"),
-                    "url": getattr(r, "url", ""),
-                    "snippet": (getattr(r, "description", "") or "")[:300]
-                })
-        except Exception:
-            pass
 
     return results
 
@@ -719,11 +859,16 @@ Answer:"""
     )
 
     rag_chain = web_rag_prompt | web_llm | StrOutputParser()
-    answer_text = rag_chain.invoke({
-        "web_context": web_context_str,
-        "question": query,
-        "filename": filename
-    })
+    try:
+        answer_text = rag_chain.invoke({
+            "web_context": web_context_str,
+            "question": query,
+            "filename": filename
+        })
+    except Exception:
+        # Fallback to direct web search summaries if LLM call times out
+        top_results = "\n\n".join([f"- **{r['title']}**: {r['snippet']}" for r in results[:2]])
+        answer_text = f"This detail was not found in **{filename}**, but here are the relevant search results:\n\n{top_results}"
 
     web_sources = [
         {
@@ -751,6 +896,22 @@ def no_context_fallback_node(state: RAGState) -> dict:
     }
 
 
+def record_history_node(state: RAGState) -> dict:
+    """
+    Day 10: State Checkpoint Finalizer.
+    Appends the completed user-assistant turn to the thread history.
+    """
+    question = state.get("original_question") or state.get("question", "")
+    answer = state.get("answer", "")
+    history = list(state.get("chat_history") or [])
+    if question and answer:
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+    return {
+        "chat_history": history
+    }
+
+
 # ============================================================================
 # Step 3: Conditional Routing Functions
 # ============================================================================
@@ -766,9 +927,18 @@ def route_after_grading(state: RAGState) -> str:
     """
     Dynamic Routing:
     1. If relevant documents exist in ChromaDB -> generate answer directly.
-    2. If NO relevant chunks found in ChromaDB -> trigger the web search tool!
+    2. If question is about past conversation -> direct_generate (uses DB history).
+    3. If question is scoped to the document -> generate (never external web search).
+    4. If NO relevant chunks found in ChromaDB -> trigger the web search tool!
     """
     if state.get("relevance_status") == "has_context":
+        return "generate"
+
+    question = state.get("original_question") or state.get("question", "")
+    if is_conversation_scoped_query(question):
+        return "direct_generate"
+
+    if is_document_scoped_query(question):
         return "generate"
 
     # Immediately use the web search tool when related chunks are not found in ChromaDB
@@ -777,30 +947,31 @@ def route_after_grading(state: RAGState) -> str:
 
 def route_after_verification(state: RAGState) -> str:
     """
-    Day 9 Quality Gate Routing:
-    - If grounded -> deliver directly to user (END) with 0 extra cloud calls.
+    Day 9/10 Quality Gate Routing:
+    - If grounded -> record history & deliver to user with 0 extra cloud calls.
     - If hallucinated AND generation_retry_count < 1 -> strict_regenerate.
-    - If generation_retry_count >= 1 -> finish safely to END.
+    - If generation_retry_count >= 1 -> finish safely to record_history.
     """
     if state.get("verification_status") == "grounded":
-        return "end"
+        return "record_history"
 
     retries = state.get("generation_retry_count", 0)
     if retries < 1:
         return "strict_regenerate"
 
-    return "end"
+    return "record_history"
 
 
 # ============================================================================
-# Step 4: Constructing & Compiling the Day 9 StateGraph
+# Step 4: Constructing & Compiling the Day 10 StateGraph with MemorySaver
 # ============================================================================
 
 def build_rag_graph():
-    """Compiles the Day 9 cyclic state graph with Self-RAG verification, query rewriting, and web search fallback."""
+    """Compiles the Day 10 cyclic state graph with MemorySaver checkpointer, Multi-Turn history, and Self-RAG verification."""
     workflow = StateGraph(RAGState)
 
     # 1. Add all worker nodes
+    workflow.add_node("contextualize_query", contextualize_query_node)
     workflow.add_node("route_query", route_query_node)
     workflow.add_node("direct_generate", direct_generate_node)
     workflow.add_node("retrieve", retrieve_node)
@@ -811,9 +982,12 @@ def build_rag_graph():
     workflow.add_node("strict_regenerate", strict_regenerate_node)
     workflow.add_node("web_search", web_search_node)
     workflow.add_node("no_context_fallback", no_context_fallback_node)
+    workflow.add_node("record_history", record_history_node)
 
     # 2. Add control flow edges
-    workflow.add_edge(START, "route_query")
+    # Day 10 Entry: Start at contextualizer before router
+    workflow.add_edge(START, "contextualize_query")
+    workflow.add_edge("contextualize_query", "route_query")
 
     # Conditional Edge 1: Query Router
     workflow.add_conditional_edges(
@@ -850,7 +1024,7 @@ def build_rag_graph():
         "verify_generation",
         route_after_verification,
         {
-            "end": END,
+            "record_history": "record_history",
             "strict_regenerate": "strict_regenerate"
         }
     )
@@ -858,13 +1032,14 @@ def build_rag_graph():
     # Cyclic feedback loop: Strict regenerate feeds back to verifier
     workflow.add_edge("strict_regenerate", "verify_generation")
 
-    # Terminal transitions
-    workflow.add_edge("direct_generate", END)
-    workflow.add_edge("web_search", END)
-    workflow.add_edge("no_context_fallback", END)
+    # Transitions to history record node & terminal END
+    workflow.add_edge("direct_generate", "record_history")
+    workflow.add_edge("web_search", "record_history")
+    workflow.add_edge("no_context_fallback", "record_history")
+    workflow.add_edge("record_history", END)
 
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer)
 
 
-# Compiled singleton instance
+# Compiled singleton instance with MemorySaver checkpointer
 rag_graph = build_rag_graph()

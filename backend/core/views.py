@@ -117,8 +117,21 @@ class DocumentAskView(APIView):
             selected_context=selected_context
         )
 
-        # 2. Execute Day 9 LangGraph State Workflow (CRAG + Web Search Fallback + Self-RAG Local Guard)
+        # 2. Retrieve recent persistent conversation history from the database (up to last 8 turns)
+        prev_messages = ChatMessage.objects.filter(
+            document=document,
+            user=request.user
+        ).exclude(id=user_msg.id).order_by('-created_at')[:8]
+
+        db_history = [
+            {"role": m.sender, "content": m.content}
+            for m in reversed(prev_messages)
+        ]
+
+        # 3. Execute Day 10 LangGraph State Workflow (Checkpointer + DB-Backed Multi-Turn Memory + Self-RAG)
         try:
+            thread_id = f"user_{request.user.id}_doc_{document.id}"
+            config = {"configurable": {"thread_id": thread_id}}
             initial_state = {
                 "user_id": request.user.id,
                 "document_id": document.id,
@@ -128,13 +141,22 @@ class DocumentAskView(APIView):
                 "selected_context": selected_context,
                 "retry_count": 0,
                 "generation_retry_count": 0,
-                "sources": []
+                "sources": [],
+                "chat_history": db_history,
             }
-            graph_output = rag_graph.invoke(initial_state)
+            graph_output = rag_graph.invoke(initial_state, config=config)
             answer_text = graph_output.get("answer", "")
             sources = graph_output.get("sources", [])
         except Exception as e:
-            return Response({"detail": f"Graph workflow error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            err_str = str(e)
+            if "DEADLINE_EXCEEDED" in err_str or "timeout" in err_str.lower():
+                answer_text = (
+                    "⚠️ The AI service took longer than expected to process this request (temporary network timeout). "
+                    "Please try submitting your question again."
+                )
+            else:
+                answer_text = f"⚠️ I encountered an issue processing your request: {err_str}"
+            sources = []
 
         # 3. Save Assistant Chat Message
         bot_msg = ChatMessage.objects.create(
